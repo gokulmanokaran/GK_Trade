@@ -14,8 +14,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -33,7 +33,7 @@ optionpulse.db
 .env
 .env.local
 .env.*.local
-*.env
+!**/.env.example
 !.env.example
 
 # Next.js / Node
