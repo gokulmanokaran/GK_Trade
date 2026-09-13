@@ -1,10 +1,6 @@
 {
   "crons": [
     {
-      "path": "/api/cron/market-monitor",
-      "schedule": "* * * * *"
-    },
-    {
       "path": "/api/cron/daily-summary",
       "schedule": "30 10 * * 1-5"
     }

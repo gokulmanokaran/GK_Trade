@@ -9,10 +9,7 @@ export const HistoryView: React.FC = () => {
 
   const fetchHistory = async () => {
     try {
-      const url = filterSym
-        ? `http://localhost:8000/api/signals/history?symbol=${filterSym}`
-        : "http://localhost:8000/api/signals/history";
-      const res = await fetch(url);
+      const res = await fetch("/api/signals/today");
       const data = await res.json();
       if (data.signals) setSignals(data.signals);
     } catch (e) {

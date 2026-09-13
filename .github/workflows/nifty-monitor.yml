@@ -1,0 +1,55 @@
+name: NIFTY 50 Options Market Monitor Watchdog
+
+on:
+  schedule:
+    # Runs every 10 minutes from 03:45 to 10:00 UTC (09:15 to 15:30 IST) Monday to Friday
+    - cron: "*/10 3-10 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: "Force monitor run outside market hours"
+        required: false
+        default: "false"
+        type: boolean
+
+jobs:
+  monitor-nifty:
+    name: Trigger NIFTY Analysis & Monitoring Watchdog
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Market Hours & Ping Vercel Watchdog Endpoint
+        run: |
+          echo "Starting NIFTY Options Market Watchdog at $(date -u)"
+          
+          VERCEL_URL="${{ secrets.VERCEL_APP_URL }}"
+          CRON_SECRET="${{ secrets.CRON_SECRET }}"
+          
+          if [ -z "$VERCEL_URL" ]; then
+            echo "ERROR: VERCEL_APP_URL secret is not configured in repository secrets."
+            echo "Please set VERCEL_APP_URL (e.g. https://gk-trade.vercel.app) in GitHub Repo Settings -> Secrets."
+            exit 1
+          fi
+          
+          # Strip trailing slash if present
+          VERCEL_URL="${VERCEL_URL%/}"
+          TARGET_URL="${VERCEL_URL}/api/monitor/nifty"
+          
+          echo "Sending watchdog trigger to: ${TARGET_URL}"
+          
+          RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}\nTIME_TOTAL:%{time_total}s" \
+            -X POST "${TARGET_URL}" \
+            -H "Authorization: Bearer ${CRON_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d "{\"source\":\"github_actions_watchdog\",\"force\":\"${{ inputs.force_run }}\"}")
+          
+          echo "Watchdog Response:"
+          echo "$RESPONSE"
+          
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d':' -f2)
+          
+          if [ "$HTTP_STATUS" -ge 200 ] && [ "$HTTP_STATUS" -lt 300 ]; then
+            echo "Watchdog trigger succeeded with HTTP $HTTP_STATUS."
+          else
+            echo "Watchdog trigger returned non-2xx status: $HTTP_STATUS."
+            exit 1
+          fi

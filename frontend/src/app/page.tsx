@@ -113,13 +113,59 @@ function statusConfig(status: string) {
 // ═══════════════════════════════════════════════════════════════
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════
-function HomeTab({ quote, signal, chain, candles, indicators, loading, onRefresh, todaySignals }: {
-  quote: Quote | null; signal: Signal | null; chain: Chain | null;
-  candles: Candle[]; indicators: Indicators; loading: boolean;
-  onRefresh: () => void; todaySignals: Signal[];
+function HomeTab({
+  quote,
+  signal,
+  chain,
+  candles,
+  indicators,
+  loading,
+  onRefresh,
+  todaySignals,
+  missedSignals = [],
+  onSelectTab,
+}: {
+  quote: Quote | null;
+  signal: Signal | null;
+  chain: Chain | null;
+  candles: Candle[];
+  indicators: Indicators;
+  loading: boolean;
+  onRefresh: () => void;
+  todaySignals: Signal[];
+  missedSignals?: any[];
+  onSelectTab: (tab: string) => void;
 }) {
+  const [bannerDismissed, setBannerDismissed] = useState(false);
+
   return (
     <div className="animate-fade-in">
+      {/* ── Welcome Back Banner ─────────────────────── */}
+      {missedSignals.length > 0 && !bannerDismissed && (
+        <div style={{ margin: '16px 16px 0', padding: '12px 16px', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <div style={{ fontSize: '12px', fontWeight: 800, color: 'var(--sky)', letterSpacing: '0.04em' }}>👋 WELCOME BACK</div>
+            <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+              You missed {missedSignals.length} alert{missedSignals.length > 1 ? 's' : ''} today while away.
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <button
+              onClick={() => onSelectTab('history')}
+              style={{ background: 'var(--sky)', color: '#000', fontSize: '11px', fontWeight: 800, padding: '5px 12px', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
+            >
+              Review
+            </button>
+            <button
+              onClick={() => setBannerDismissed(true)}
+              style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px' }}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── NIFTY Hero ─────────────────────────────── */}
       <div style={{ padding: '16px 16px 0' }}>
         <div className="card" style={{ padding: '16px', marginBottom: '12px' }}>
@@ -618,28 +664,38 @@ function ChainTab({ chain, loading }: { chain: Chain | null; loading: boolean })
 // ═══════════════════════════════════════════════════════════════
 // HISTORY TAB
 // ═══════════════════════════════════════════════════════════════
-function HistoryTab({ todaySignals }: { todaySignals: Signal[] }) {
-  const trades = todaySignals.filter(s => s.signalType !== 'NO_TRADE');
-  const triggered = trades.filter(s => !['WATCH', 'WAITING_FOR_ENTRY'].includes(s.status));
-  const t1 = trades.filter(s => ['TARGET1_HIT', 'TARGET2_HIT', 'TRAILING_SL'].includes(s.status)).length;
-  const sl = trades.filter(s => s.status === 'SL_HIT').length;
-  const winRate = triggered.length > 0 ? Math.round((t1 / triggered.length) * 100) : null;
+function HistoryTab({
+  todaySignals,
+  timelineEvents,
+  missedSignals,
+  summary,
+}: {
+  todaySignals: Signal[];
+  timelineEvents: any[];
+  missedSignals: any[];
+  summary: any;
+}) {
+  const [activeSection, setActiveSection] = useState<'timeline' | 'missed'>('timeline');
 
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
-      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>History</div>
+      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>
+        History & Signals
+      </div>
 
-      {/* Daily stats */}
+      {/* Daily stats from Supabase summary */}
       <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>TODAY'S PERFORMANCE</div>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>
+          TODAY'S PERFORMANCE (SIMULATED)
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
           {[
-            { label: 'SIGNALS', val: trades.length, color: 'var(--text-primary)' },
-            { label: 'TRIGGERED', val: triggered.length, color: 'var(--sky)' },
-            { label: 'WIN RATE', val: winRate != null ? `${winRate}%` : '—', color: winRate != null && winRate >= 50 ? 'var(--emerald)' : 'var(--rose)' },
-            { label: 'TARGET HIT', val: t1, color: 'var(--emerald)' },
-            { label: 'SL HIT', val: sl, color: 'var(--rose)' },
-            { label: 'NO TRADE', val: todaySignals.filter(s => s.signalType === 'NO_TRADE').length, color: 'var(--text-muted)' },
+            { label: 'SIGNALS', val: summary?.totalSignals ?? todaySignals.filter(s => s.signalType !== 'NO_TRADE').length, color: 'var(--text-primary)' },
+            { label: 'TRIGGERED', val: summary?.triggeredSignals ?? 0, color: 'var(--sky)' },
+            { label: 'WIN RATE', val: summary?.winRate != null ? `${summary.winRate}%` : '—', color: summary?.winRate >= 50 ? 'var(--emerald)' : 'var(--rose)' },
+            { label: 'TARGET 1', val: summary?.target1Hits ?? 0, color: 'var(--emerald)' },
+            { label: 'TARGET 2', val: summary?.target2Hits ?? 0, color: 'var(--emerald)' },
+            { label: 'STOP LOSS', val: summary?.slHits ?? 0, color: 'var(--rose)' },
           ].map(({ label, val, color }) => (
             <div key={label} className="card" style={{ padding: '12px', textAlign: 'center' }}>
               <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>{label}</div>
@@ -647,19 +703,94 @@ function HistoryTab({ todaySignals }: { todaySignals: Signal[] }) {
             </div>
           ))}
         </div>
+        {summary?.simulatedPnl != null && (
+          <div className="card" style={{ marginTop: '8px', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: summary.simulatedPnl >= 0 ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)' }}>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>SIMULATED P&L (1 LOT = 50 QTY)</span>
+            <span style={{ fontSize: '14px', fontWeight: 800, color: summary.simulatedPnl >= 0 ? 'var(--emerald)' : 'var(--rose)', fontFamily: 'monospace' }}>
+              {summary.simulatedPnl >= 0 ? '+' : ''}₹{summary.simulatedPnl.toLocaleString('en-IN')}
+            </span>
+          </div>
+        )}
       </div>
 
-      {/* Signal journal */}
-      <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>SIGNAL JOURNAL</div>
-      {todaySignals.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          {todaySignals.map((s, i) => <TimelineItem key={i} signal={s} />)}
+      {/* Tabs for Timeline vs Missed */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+        <button
+          onClick={() => setActiveSection('timeline')}
+          style={{
+            flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+            background: activeSection === 'timeline' ? 'var(--emerald)' : 'var(--bg-elevated)',
+            color: activeSection === 'timeline' ? '#000' : 'var(--text-secondary)',
+            border: 'none', cursor: 'pointer'
+          }}
+        >
+          Timeline ({timelineEvents.length || todaySignals.length})
+        </button>
+        <button
+          onClick={() => setActiveSection('missed')}
+          style={{
+            flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+            background: activeSection === 'missed' ? 'var(--amber)' : 'var(--bg-elevated)',
+            color: activeSection === 'missed' ? '#000' : 'var(--text-secondary)',
+            border: 'none', cursor: 'pointer'
+          }}
+        >
+          Missed ({missedSignals.length})
+        </button>
+      </div>
+
+      {/* Timeline Section */}
+      {activeSection === 'timeline' && (
+        <div>
+          {todaySignals.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {todaySignals.map((s, i) => <TimelineItem key={i} signal={s} />)}
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '36px', marginBottom: '8px' }}>📅</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>No signals generated today</div>
+              <div style={{ fontSize: '12px', marginTop: '4px' }}>Market monitoring is actively running in background</div>
+            </div>
+          )}
         </div>
-      ) : (
-        <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '36px', marginBottom: '8px' }}>📅</div>
-          <div style={{ fontSize: '14px', fontWeight: 600 }}>No data for today</div>
-          <div style={{ fontSize: '12px', marginTop: '4px' }}>Signals appear here as they are generated</div>
+      )}
+
+      {/* Missed Opportunities Section */}
+      {activeSection === 'missed' && (
+        <div>
+          {missedSignals.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {missedSignals.map((s, i) => (
+                <div key={i} className="card" style={{ padding: '12px', borderLeft: '3px solid var(--amber)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>
+                        {s.signal_type === 'CALL_BUY' ? '🟢 CALL' : '🔴 PUT'} {s.strike} {s.option_type}
+                      </div>
+                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                        Entry: ₹{s.entry_low}–₹{s.entry_high} · SL: ₹{s.sl} · Target: ₹{s.target1}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--amber)', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: '6px' }}>
+                        Score: {s.signal_score}
+                      </span>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    {s.technical_reason || s.no_trade_reason}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '36px', marginBottom: '8px' }}>✅</div>
+              <div style={{ fontSize: '14px', fontWeight: 600 }}>No missed signals</div>
+              <div style={{ fontSize: '12px', marginTop: '4px' }}>You are completely up to date</div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -670,9 +801,87 @@ function HistoryTab({ todaySignals }: { todaySignals: Signal[] }) {
 // SETTINGS TAB
 // ═══════════════════════════════════════════════════════════════
 function SettingsTab() {
+  const [pushStatus, setPushStatus] = useState<string>('idle');
+
+  const handleEnablePush = async () => {
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) {
+      alert('Push notifications are not supported by this browser.');
+      return;
+    }
+
+    try {
+      setPushStatus('subscribing');
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        alert('Notification permission was not granted.');
+        setPushStatus('denied');
+        return;
+      }
+
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || undefined,
+        });
+      }
+
+      const rawKey = sub.getKey ? sub.getKey('p256dh') : null;
+      const rawAuth = sub.getKey ? sub.getKey('auth') : null;
+      const p256dh = rawKey ? btoa(String.fromCharCode(...new Uint8Array(rawKey))) : '';
+      const auth = rawAuth ? btoa(String.fromCharCode(...new Uint8Array(rawAuth))) : '';
+
+      await fetch('/api/notifications/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: sub.endpoint,
+          keys: { p256dh, auth },
+          deviceInfo: navigator.userAgent,
+        }),
+      });
+
+      setPushStatus('enabled');
+      alert('✅ Background Push Notifications are now enabled on your device!');
+    } catch (err: any) {
+      console.error('Push error:', err);
+      setPushStatus('error');
+      alert(`Could not enable notifications: ${err.message}`);
+    }
+  };
+
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
       <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>Settings</div>
+
+      {/* Web Push Alerts Card */}
+      <div style={{ marginBottom: '16px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>BACKGROUND ALERTS</div>
+        <div className="card" style={{ padding: '16px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+            <div>
+              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Mobile Push Notifications</div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                Receive Entry, Target, and SL alerts even when the browser is closed.
+              </div>
+            </div>
+          </div>
+          <button
+            onClick={handleEnablePush}
+            disabled={pushStatus === 'subscribing' || pushStatus === 'enabled'}
+            style={{
+              width: '100%', padding: '10px', borderRadius: '10px',
+              background: pushStatus === 'enabled' ? 'rgba(16,185,129,0.15)' : 'var(--emerald)',
+              color: pushStatus === 'enabled' ? 'var(--emerald)' : '#000',
+              fontWeight: 800, fontSize: '13px', border: pushStatus === 'enabled' ? '1px solid var(--emerald)' : 'none',
+              cursor: pushStatus === 'enabled' ? 'default' : 'pointer'
+            }}
+          >
+            {pushStatus === 'enabled' ? '✓ Push Notifications Active' : pushStatus === 'subscribing' ? 'Requesting Permission...' : '🔔 Enable Push Notifications'}
+          </button>
+        </div>
+      </div>
 
       {/* Risk */}
       <div style={{ marginBottom: '16px' }}>
@@ -710,36 +919,6 @@ function SettingsTab() {
             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{label}</span>
               <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{val}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Notifications */}
-      <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>NOTIFICATIONS</div>
-        <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-          {[
-            { label: 'New signal', enabled: true },
-            { label: 'Entry triggered', enabled: true },
-            { label: 'Stop loss hit', enabled: true },
-            { label: 'Target 1 hit', enabled: true },
-            { label: 'Target 2 hit', enabled: true },
-            { label: 'Daily summary', enabled: true },
-          ].map(({ label, enabled }) => (
-            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{label}</span>
-              <div style={{
-                width: 44, height: 24, borderRadius: 12,
-                background: enabled ? 'var(--emerald)' : 'var(--border)',
-                position: 'relative', cursor: 'pointer'
-              }}>
-                <div style={{
-                  position: 'absolute', top: 2, left: enabled ? 22 : 2,
-                  width: 20, height: 20, borderRadius: '50%',
-                  background: '#fff', transition: 'left 0.2s'
-                }} />
-              </div>
             </div>
           ))}
         </div>
@@ -791,15 +970,20 @@ export default function App() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [indicators, setIndicators] = useState<Indicators>({});
   const [todaySignals, setTodaySignals] = useState<Signal[]>([]);
+  const [timelineEvents, setTimelineEvents] = useState<any[]>([]);
+  const [missedSignals, setMissedSignals] = useState<any[]>([]);
+  const [dailySummary, setDailySummary] = useState<any>(null);
   const [isMock, setIsMock] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string>('');
 
   const fetchAll = useCallback(async () => {
     try {
       setLoading(true);
-      const [quoteRes, signalRes, chainRes, chartRes] = await Promise.allSettled([
+      const [quoteRes, currentSigRes, todaySigRes, summaryRes, chainRes, chartRes] = await Promise.allSettled([
         fetch('/api/market/quote'),
-        fetch('/api/signals'),
+        fetch('/api/signals/current'),
+        fetch('/api/signals/today'),
+        fetch('/api/summary/today'),
         fetch('/api/market/option-chain'),
         fetch('/api/market/chart?timeframe=5m&limit=80'),
       ]);
@@ -809,13 +993,28 @@ export default function App() {
         if (d.success) setQuote(d.data);
       }
 
-      if (signalRes.status === 'fulfilled' && signalRes.value.ok) {
-        const d = await signalRes.value.json();
-        if (d.success) {
-          setSignal(d.data.currentSignal);
-          setTodaySignals(d.data.todaySignals || []);
-          setIsMock(d.data.isMockData);
+      if (currentSigRes.status === 'fulfilled' && currentSigRes.value.ok) {
+        const d = await currentSigRes.value.json();
+        if (d.success && d.signal) {
+          setSignal(d.signal);
         }
+      }
+
+      if (todaySigRes.status === 'fulfilled' && todaySigRes.value.ok) {
+        const d = await todaySigRes.value.json();
+        if (d.success) {
+          setTodaySignals(d.signals || []);
+          setTimelineEvents(d.timelineEvents || []);
+          setMissedSignals(d.missedSignals || []);
+          if (!signal && d.signals?.length > 0) {
+            setSignal(d.signals[d.signals.length - 1]);
+          }
+        }
+      }
+
+      if (summaryRes.status === 'fulfilled' && summaryRes.value.ok) {
+        const d = await summaryRes.value.json();
+        if (d.success) setDailySummary(d.summary);
       }
 
       if (chainRes.status === 'fulfilled' && chainRes.value.ok) {
@@ -837,12 +1036,12 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [signal]);
 
-  // Initial load + auto-refresh every 30s
+  // Initial load + auto-refresh every 10s
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 30000);
+    const interval = setInterval(fetchAll, 10000);
     return () => clearInterval(interval);
   }, [fetchAll]);
 
@@ -857,10 +1056,16 @@ export default function App() {
       <main id="main-content">
         {tab === 'home' && (
           <HomeTab
-            quote={quote} signal={signal} chain={chain}
-            candles={candles} indicators={indicators}
-            loading={loading} onRefresh={fetchAll}
+            quote={quote}
+            signal={signal}
+            chain={chain}
+            candles={candles}
+            indicators={indicators}
+            loading={loading}
+            onRefresh={fetchAll}
             todaySignals={todaySignals}
+            missedSignals={missedSignals}
+            onSelectTab={setTab}
           />
         )}
         {tab === 'signals' && (
@@ -870,7 +1075,12 @@ export default function App() {
           <ChainTab chain={chain} loading={loading} />
         )}
         {tab === 'history' && (
-          <HistoryTab todaySignals={todaySignals} />
+          <HistoryTab
+            todaySignals={todaySignals}
+            timelineEvents={timelineEvents}
+            missedSignals={missedSignals}
+            summary={dailySummary}
+          />
         )}
         {tab === 'settings' && <SettingsTab />}
       </main>
