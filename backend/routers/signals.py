@@ -17,6 +17,8 @@ from backend.analysis_engine import (
     calculate_support_resistance, calculate_signal_score,
     structure_option_trade, generate_trade_explanation
 )
+from backend.analysis_engine.confluence_strategy import ConfluenceStrategyEngine
+from dataclasses import asdict
 
 router = APIRouter(prefix="/api/signals", tags=["Signals"])
 provider = CompositeMarketDataProvider()
@@ -43,6 +45,19 @@ async def get_latest_signal(
         score = calculate_signal_score(quote, indicators, oi_summary, sr_levels)
         trade = structure_option_trade(quote, chain, score, sr_levels, indicators)
         ai_expl = generate_trade_explanation(trade, score, sr_levels, oi_summary, indicators)
+
+        # Confluence Strategy Setup (Strict 20 Rules)
+        is_market_open = provider.get_market_status().is_open
+        confluence = ConfluenceStrategyEngine.evaluate(
+            candles=candles,
+            quote=quote,
+            chain=chain,
+            is_market_open=is_market_open,
+            data_quality=getattr(quote, "data_quality", "LIVE"),
+            data_source=quote.data_source,
+            data_age_seconds=quote.data_age_seconds,
+            is_live_data=getattr(quote, "is_live_data", not quote.is_delayed)
+        )
 
         # Persist signal if active trade setup
         if trade.signal != "NO TRADE":
@@ -91,6 +106,7 @@ async def get_latest_signal(
 
         return {
             "trade": trade.model_dump(),
+            "confluence_setup": asdict(confluence),
             "score_breakdown": score.model_dump(),
             "ai_explanation": ai_expl,
             "support_resistance": sr_levels,
@@ -104,7 +120,10 @@ async def get_latest_signal(
                 "vwap": quote.vwap,
                 "timestamp": quote.timestamp,
                 "data_source": quote.data_source,
-                "is_delayed": quote.is_delayed
+                "is_delayed": quote.is_delayed,
+                "data_quality": getattr(quote, "data_quality", "LIVE"),
+                "is_live_data": getattr(quote, "is_live_data", not quote.is_delayed),
+                "data_age_seconds": quote.data_age_seconds,
             }
         }
     except Exception as e:

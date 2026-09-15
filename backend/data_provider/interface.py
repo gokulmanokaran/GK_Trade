@@ -28,6 +28,8 @@ class UnderlyingQuote(BaseModel):
     data_source: str = "COMPOSITE"
     is_delayed: bool = False
     data_age_seconds: int = 0
+    data_quality: str = "LIVE"  # LIVE, DELAYED, STALE, INSUFFICIENT
+    is_live_data: bool = True
 
 
 class Greeks(BaseModel):

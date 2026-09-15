@@ -104,9 +104,9 @@ def structure_option_trade(
     spread = abs((contract.ask if contract else opt_ltp) - (contract.bid if contract else opt_ltp))
     spread_buffer = max(1.5, min(4.0, spread if spread > 0 else 2.0))
 
-    entry_low = round(max(5.0, opt_ltp - spread_buffer), 1)
-    entry_high = round(opt_ltp + (spread_buffer * 0.5), 1)
-    entry_trigger = f"Wait for confirmation above ₹{entry_high:.1f} or entry on pullback near ₹{entry_low:.1f}"
+    entry_low = round(max(0.5, opt_ltp - spread_buffer), 1)
+    entry_high = round(max(entry_low + 0.5, opt_ltp + (spread_buffer * 0.5)), 1)
+    entry_trigger = f"Wait for confirmation above Rs.{entry_high:.1f} or entry on pullback near Rs.{entry_low:.1f}"
 
     # 2. Stop Loss Calculation based on underlying structure & ATR
     atr = indicators.get("atr_14", 25.0)
@@ -144,7 +144,7 @@ def structure_option_trade(
     # 4. Exit Engine Condition
     exit_status = "HOLD"
     trailing_sl = None
-    exit_cond = f"Exit at Target 2 (₹{target_2}) or upon break of {invalidation}."
+    exit_cond = f"Exit at Target 2 (Rs.{target_2}) or upon break of {invalidation}."
 
     # Reasons
     reasons = []

@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/server';
-import { todayIST } from '@/lib/market-hours';
+import { todayIST, getMarketStatus } from '@/lib/market-hours';
+import { getMarketDataProvider } from '@/lib/market-data';
+import { evaluateConfluence, ConfluenceSignalResult } from '@/lib/signal/confluence-strategy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,37 +10,141 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   try {
     const supabase = getSupabaseAdmin();
-    if (!supabase) {
-      return NextResponse.json({ success: false, error: 'Database unavailable' }, { status: 503 });
-    }
-
     const today = todayIST();
 
-    // Query active signal from today (not terminal)
-    const { data: activeSignals, error } = await supabase
-      .from('signals')
-      .select(`
-        *,
-        signal_components(*),
-        signal_events(*)
-      `)
-      .gte('created_at', `${today}T00:00:00+05:30`)
-      .not('status', 'in', '("EXIT","INVALIDATED","NO_TRADE")')
-      .order('created_at', { ascending: false })
-      .limit(1);
+    // 1. Try to query active signal from today in Supabase
+    if (supabase) {
+      try {
+        const { data: activeSignals } = await supabase
+          .from('signals')
+          .select(`
+            *,
+            signal_components(*),
+            signal_events(*)
+          `)
+          .gte('created_at', `${today}T00:00:00+05:30`)
+          .not('status', 'in', '("EXIT","INVALIDATED","NO_TRADE")')
+          .order('created_at', { ascending: false })
+          .limit(1);
 
-    if (error) {
-      return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+        if (activeSignals && activeSignals.length > 0) {
+          const dbSig = activeSignals[0];
+          return NextResponse.json({
+            success: true,
+            hasActiveSignal: true,
+            signal: {
+              id: dbSig.id,
+              signalType: dbSig.signal_type,
+              status: dbSig.status,
+              strike: dbSig.strike,
+              optionType: dbSig.option_type,
+              expiry: dbSig.expiry,
+              niftyPrice: dbSig.nifty_price,
+              entryLow: dbSig.entry_low,
+              entryHigh: dbSig.entry_high,
+              entryTrigger: dbSig.entry_trigger,
+              sl: dbSig.sl,
+              slReason: dbSig.sl_reason,
+              target1: dbSig.target1,
+              target2: dbSig.target2,
+              rrRatio: dbSig.rr_ratio,
+              signalScore: dbSig.signal_score,
+              confidence: dbSig.confidence,
+              regime: dbSig.regime,
+              trendDirection: dbSig.trend_direction,
+              technicalReason: dbSig.technical_reason,
+              oiReason: dbSig.oi_reason,
+              chainReason: dbSig.chain_reason,
+              createdAt: dbSig.created_at,
+            },
+            dataQuality: 'LIVE',
+          });
+        }
+      } catch (dbErr) {
+        console.warn('[signals/current] Supabase query failed, falling back to on-demand evaluation:', dbErr);
+      }
     }
 
-    const currentSignal = activeSignals && activeSignals.length > 0 ? activeSignals[0] : null;
+    // 2. On-Demand Confluence Evaluation (No blank screen, Rule 16)
+    const provider = getMarketDataProvider();
+    const marketStatus = getMarketStatus();
+
+    const [quote, chain, candles] = await Promise.all([
+      provider.getNiftyQuote(),
+      provider.getOptionChain(),
+      provider.getHistoricalData('5m', 80),
+    ]);
+
+    const dataAgeSeconds = Math.max(0, Math.floor((Date.now() - new Date(quote.timestamp).getTime()) / 1000));
+    
+    // Determine honest data quality (Rules 3, 17, 18)
+    let dataQuality: 'LIVE' | 'DELAYED' | 'STALE' | 'INSUFFICIENT' = 'LIVE';
+    if (quote.isMock) {
+      dataQuality = 'DELAYED';
+    } else if (dataAgeSeconds > 3600) {
+      dataQuality = 'STALE';
+    } else if (quote.provider === 'yahoo' || dataAgeSeconds > 60) {
+      dataQuality = 'DELAYED';
+    }
+
+    const isLiveData = dataQuality === 'LIVE';
+
+    const confluence = evaluateConfluence(candles, quote, chain, {
+      isMarketOpen: marketStatus.isOpen,
+      dataQuality,
+      dataSource: quote.provider,
+      dataAgeSeconds,
+      isLiveData,
+    });
+
+    const fallbackSignal = {
+      id: `live-${Date.now()}`,
+      signalType: confluence.signalType,
+      status: confluence.state,
+      strike: confluence.recommendedStrike ?? Math.round(quote.ltp / 50) * 50,
+      optionType: confluence.optionType ?? (confluence.direction === 'CE' ? 'CE' : 'PE'),
+      expiry: chain?.expiry ?? 'Current Expiry',
+      niftyPrice: quote.ltp,
+      entryLow: confluence.entryPrice ? +(confluence.entryPrice - 2).toFixed(1) : quote.ltp,
+      entryHigh: confluence.entryPrice ? +(confluence.entryPrice + 2).toFixed(1) : quote.ltp,
+      entryTrigger: confluence.state === 'ENTRY_TRIGGERED'
+        ? `Enter ${confluence.instrumentName} at ₹${confluence.optionLtp ?? 0} with target ₹${confluence.target1}`
+        : (confluence.rejectionReason ?? confluence.summaryReason),
+      sl: confluence.sl ?? quote.ltp - 25,
+      slReason: confluence.invalidationCondition ?? 'Retest swing or VWAP break',
+      target1: confluence.target1 ?? quote.ltp + 35,
+      target2: confluence.target2 ?? quote.ltp + 55,
+      rrRatio: confluence.rrRatio ?? 1.5,
+      signalScore: confluence.confidenceScore,
+      confidence: confluence.confidenceScore,
+      regime: confluence.direction === 'CE' ? 'BULLISH' : confluence.direction === 'PE' ? 'BEARISH' : 'CHOPPY_SIDEWAYS',
+      trendDirection: confluence.direction,
+      technicalReason: confluence.summaryReason,
+      oiReason: chain?.pcr ? `PCR at ${chain.pcr.toFixed(2)}` : 'OI Analysis',
+      chainReason: `ATM: ${chain?.atmStrike ?? Math.round(quote.ltp / 50) * 50}`,
+      noTradeReason: confluence.rejectionReason ?? undefined,
+      createdAt: new Date().toISOString(),
+      confluenceSetup: confluence,
+      dataQuality,
+      dataAgeSeconds,
+      isLiveData,
+    };
 
     return NextResponse.json({
       success: true,
-      hasActiveSignal: Boolean(currentSignal),
-      signal: currentSignal,
+      hasActiveSignal: confluence.state === 'ENTRY_TRIGGERED',
+      signal: fallbackSignal,
+      confluenceSetup: confluence,
+      dataQuality,
     });
   } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+    console.error('[API /signals/current]', err);
+    return NextResponse.json({
+      success: false,
+      error: err.message,
+      signal: null,
+      state: 'INSUFFICIENT_DATA',
+      dataQuality: 'INSUFFICIENT',
+    }, { status: 200 }); // Return 200 with error structure to prevent frontend hard crash
   }
 }

@@ -114,11 +114,14 @@ class MockMarketDataProvider(MarketDataProvider):
             timestamp=now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
             data_source="MOCK_REPLAY",
             is_delayed=False,
-            data_age_seconds=2
+            data_age_seconds=2,
+            data_quality="HISTORICAL_REPLAY",
+            is_live_data=False
         )
 
-    async def get_option_chain(self, symbol: str, expiry: Optional[str] = None) -> OptionChainData:
+    async def get_option_chain(self, symbol: str, expiry: Optional[str] = None, underlying_price: Optional[float] = None) -> OptionChainData:
         quote = await self.get_index_quote(symbol)
+        ltp = underlying_price if underlying_price is not None else quote.ltp
         sym = symbol.upper()
         config = INSTRUMENT_DEFAULTS.get(sym, INSTRUMENT_DEFAULTS["NIFTY"])
         step = config["strike_step"]
@@ -131,7 +134,7 @@ class MockMarketDataProvider(MarketDataProvider):
         # Default ~4 calendar days for near expiry
         time_to_expiry_years = max(0.005, 4.0 / 365.0)
 
-        atm_strike = round(quote.ltp / step) * step
+        atm_strike = round(ltp / step) * step
         num_strikes = 15  # 15 strikes above & 15 below ATM = 31 strikes total
 
         strikes: List[StrikeRow] = []

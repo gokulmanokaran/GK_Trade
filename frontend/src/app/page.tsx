@@ -204,16 +204,28 @@ function HomeTab({
                 <div style={{ textAlign: 'right' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end' }}>
                     {quote.marketStatus.isOpen
-                      ? <><span className="live-dot" /><span style={{ fontSize: '10px', color: 'var(--emerald)', fontWeight: 700 }}>LIVE</span></>
-                      : <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>CLOSED</span>
+                      ? <><span className="live-dot" /><span style={{ fontSize: '10px', color: 'var(--emerald)', fontWeight: 700 }}>MARKET OPEN</span></>
+                      : <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>MARKET CLOSED</span>
                     }
                   </div>
-                  {quote.isStale && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px', marginTop: '4px' }}>
-                      <AlertTriangle size={10} color="var(--amber)" />
-                      <span style={{ fontSize: '10px', color: 'var(--amber)', fontWeight: 600 }}>DELAYED</span>
-                    </div>
-                  )}
+                  {/* Data Quality Indicator — Rules 3, 17, 18 */}
+                  {(() => {
+                    const dq: string = (quote as any).dataQuality ?? (quote.providerStatus === 'MOCK' ? 'DELAYED' : quote.isStale ? 'STALE' : 'LIVE');
+                    const dqAge: number = (quote as any).dataAge ?? quote.dataAge ?? 0;
+                    const dqConfig: Record<string, { label: string; color: string }> = {
+                      LIVE:             { label: '🟢 LIVE', color: 'var(--emerald)' },
+                      DELAYED:          { label: `⏱ DELAYED (~${Math.round(dqAge / 60)}m)`, color: 'var(--amber)' },
+                      STALE:            { label: '🔴 STALE', color: 'var(--rose)' },
+                      INSUFFICIENT:     { label: '⚠ INSUFFICIENT', color: 'var(--text-muted)' },
+                      HISTORICAL_REPLAY:{ label: '📼 REPLAY', color: '#a78bfa' },
+                    };
+                    const cfg = dqConfig[dq] ?? dqConfig['DELAYED'];
+                    return (
+                      <div style={{ fontSize: '10px', color: cfg.color, fontWeight: 700, marginTop: '4px' }}>
+                        {cfg.label}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
             </div>
@@ -448,6 +460,85 @@ function SignalCard({ signal, compact }: { signal: Signal; compact: boolean }) {
             )}
           </div>
         )}
+
+        {/* ── Confluence Checklist (Rules 10, 17) ──────────── */}
+        {(() => {
+          const setup: any = (signal as any).confluenceSetup;
+          if (!setup || !setup.confirmations) return null;
+          const cfms: Record<string, any> = setup.confirmations;
+          const statusIcon = (s: string) => {
+            if (s === 'PASS')        return { icon: '✓', color: 'var(--emerald)' };
+            if (s === 'FAIL')        return { icon: '✗', color: 'var(--rose)' };
+            if (s === 'FAIL_CHOPPY') return { icon: '⚡', color: 'var(--rose)' };
+            if (s === 'UNAVAILABLE') return { icon: '—', color: 'var(--amber)' };
+            return                    { icon: '…', color: 'var(--text-muted)' };
+          };
+          const rows = [
+            { key: 'vwap',          label: 'VWAP Position' },
+            { key: 'ema20',         label: '20 EMA Trend' },
+            { key: 'orbBreakout',   label: 'ORB Breakout' },
+            { key: 'candleStrength',label: 'Candle Strength' },
+            { key: 'volume',        label: 'Volume' },
+            { key: 'retest',        label: 'Retest & Rejection' },
+            { key: 'choppiness',    label: 'Choppiness Filter' },
+          ];
+          return (
+            <div style={{ marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>CONFLUENCE CONFIRMATIONS</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                {rows.map(({ key, label }) => {
+                  const c = cfms[key] ?? {};
+                  const si = statusIcon(c.status ?? 'PENDING');
+                  return (
+                    <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span style={{ fontSize: '13px', color: si.color, fontWeight: 800, width: '14px', textAlign: 'center' }}>{si.icon}</span>
+                        {label}
+                      </span>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: si.color, letterSpacing: '0.04em' }}>{c.status ?? 'PENDING'}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Rejection reason banner */}
+              {setup.rejectionReason && (
+                <div style={{ marginTop: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.2)' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--rose)', lineHeight: 1.5 }}>{setup.rejectionReason}</span>
+                </div>
+              )}
+              {/* ORB levels */}
+              {(setup.orbHigh || setup.orbLow) && (
+                <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
+                  <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>ORB HIGH</div>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--emerald)' }}>{setup.orbHigh?.toFixed(1) ?? '—'}</div>
+                  </div>
+                  <div style={{ flex: 1, background: 'rgba(244,63,94,0.08)', borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>ORB LOW</div>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--rose)' }}>{setup.orbLow?.toFixed(1) ?? '—'}</div>
+                  </div>
+                  <div style={{ flex: 1, background: 'rgba(167,139,250,0.08)', borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>VWAP</div>
+                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#a78bfa' }}>{setup.vwap?.toFixed(1) ?? '—'}</div>
+                  </div>
+                </div>
+              )}
+              {/* State badge */}
+              <div style={{ marginTop: '8px', textAlign: 'center' }}>
+                <span style={{
+                  fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', padding: '4px 12px',
+                  borderRadius: '20px',
+                  background: setup.state === 'ENTRY_TRIGGERED' ? 'rgba(16,185,129,0.15)' :
+                    setup.state === 'WAITING_FOR_RETEST' ? 'rgba(245,158,11,0.15)' : 'rgba(100,116,139,0.1)',
+                  color: setup.state === 'ENTRY_TRIGGERED' ? 'var(--emerald)' :
+                    setup.state === 'WAITING_FOR_RETEST' ? 'var(--amber)' : 'var(--text-muted)'
+                }}>
+                  {setup.state?.replace(/_/g, ' ')}
+                </span>
+              </div>
+            </div>
+          );
+        })()}
 
         <div style={{ marginTop: '8px', fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
           {timeSince(signal.createdAt)}

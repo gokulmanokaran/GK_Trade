@@ -94,7 +94,13 @@ class CompositeMarketDataProvider(MarketDataProvider):
             logger.info(f"NSE Live option chain fallback triggered: {e}")
 
         # Graceful fallback to Mock / Synthetic Replay with clear labeling
-        chain = await self.mock_provider.get_option_chain(symbol, expiry)
+        underlying_ltp = None
+        try:
+            q = await self.get_index_quote(symbol)
+            underlying_ltp = q.ltp
+        except Exception:
+            pass
+        chain = await self.mock_provider.get_option_chain(symbol, expiry, underlying_price=underlying_ltp)
         self.last_provider_used = "MOCK_REPLAY"
         chain.data_source = "MOCK_REPLAY"
         chain.is_delayed = True

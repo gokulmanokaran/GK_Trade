@@ -82,7 +82,9 @@ class YahooFinanceProvider(MarketDataProvider):
                 timestamp=datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST"),
                 data_source="YAHOO_FINANCE",
                 is_delayed=True,
-                data_age_seconds=15
+                data_age_seconds=900,
+                data_quality="DELAYED",
+                is_live_data=False
             )
 
         return await asyncio.to_thread(_fetch)
