@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
       const { data: activeSigs } = await supabase
         .from('signals')
         .select('id')
-        .not('status', 'in', '("EXIT","INVALIDATED","NO_TRADE")')
+        .not('status', 'in', '("EXIT","INVALIDATED","NO_TRADE","DELETED")')
         .limit(1);
 
       hasActiveSignal = Boolean(activeSigs && activeSigs.length > 0);

@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
             signal_events(*)
           `)
           .gte('created_at', `${today}T00:00:00+05:30`)
-          .not('status', 'in', '("EXIT","INVALIDATED","NO_TRADE")')
+          .not('status', 'in', '("EXIT","INVALIDATED","NO_TRADE","DELETED")')
           .order('created_at', { ascending: false })
           .limit(1);
 

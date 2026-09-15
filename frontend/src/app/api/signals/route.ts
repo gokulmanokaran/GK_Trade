@@ -31,6 +31,7 @@ export async function GET(req: NextRequest) {
         .from('signals')
         .select('*, signal_components(*)')
         .gte('created_at', `${today}T00:00:00+05:30`)
+        .neq('status', 'DELETED')
         .order('created_at', { ascending: false })
         .limit(20);
       todaySignals = data ?? [];

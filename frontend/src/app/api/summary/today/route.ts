@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
     }
 
     const allSignals = signals || [];
-    const validSignals = allSignals.filter((s: any) => s.signal_type !== 'NO_TRADE');
+    const validSignals = allSignals.filter((s: any) => s.signal_type !== 'NO_TRADE' && s.status !== 'DELETED');
 
     const totalSignals = validSignals.length;
     let triggeredSignals = 0;

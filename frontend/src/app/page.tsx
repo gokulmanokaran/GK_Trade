@@ -82,6 +82,19 @@ function formatTime(iso: string) {
     timeZone: 'Asia/Kolkata', hour12: false
   });
 }
+function formatTimeIST(iso: string) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleTimeString('en-IN', {
+      hour: '2-digit', minute: '2-digit',
+      timeZone: 'Asia/Kolkata', hour12: true
+    }).toUpperCase();
+  } catch {
+    return '—';
+  }
+}
 
 // ── Score colour ─────────────────────────────────────────────
 function scoreColor(s: number) {
@@ -540,8 +553,26 @@ function SignalCard({ signal, compact }: { signal: Signal; compact: boolean }) {
           );
         })()}
 
-        <div style={{ marginTop: '8px', fontSize: '9px', color: 'var(--text-muted)', textAlign: 'right' }}>
-          {timeSince(signal.createdAt)}
+        <div style={{
+          marginTop: '12px',
+          padding: '8px 12px',
+          borderRadius: '8px',
+          background: 'rgba(255,255,255,0.03)',
+          border: '1px solid rgba(255,255,255,0.06)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '13px' }}>⏰</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Created At:</span>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+              {formatTimeIST(signal.createdAt)} IST
+            </span>
+          </div>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.3)', padding: '2px 8px', borderRadius: '4px' }}>
+            {timeSince(signal.createdAt)}
+          </span>
         </div>
       </div>
     </div>
@@ -551,34 +582,68 @@ function SignalCard({ signal, compact }: { signal: Signal; compact: boolean }) {
 // ═══════════════════════════════════════════════════════════════
 // TIMELINE ITEM
 // ═══════════════════════════════════════════════════════════════
-function TimelineItem({ signal }: { signal: Signal }) {
+function TimelineItem({
+  signal,
+  onDelete,
+  deleting,
+}: {
+  signal: Signal;
+  onDelete?: (s: Signal) => void;
+  deleting?: string | null;
+}) {
   const sc = statusConfig(signal.status);
   const isCall = signal.signalType === 'CALL_BUY';
   return (
     <div className="card" style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-      <div style={{ width: '32px', textAlign: 'center', flexShrink: 0 }}>
-        <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600 }}>
-          {formatTime(signal.createdAt).slice(0, 5)}
+      <div style={{ minWidth: '66px', flexShrink: 0 }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 700, fontFamily: 'monospace', lineHeight: 1.2 }}>
+          {formatTimeIST(signal.createdAt)}
+        </div>
+        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+          {timeSince(signal.createdAt)}
         </div>
       </div>
       <div style={{ width: '3px', height: '32px', borderRadius: '2px', background: signal.signalType === 'NO_TRADE' ? 'var(--border)' : isCall ? 'var(--emerald)' : 'var(--rose)', flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-          {signal.signalType === 'NO_TRADE' ? 'NO TRADE' : `${isCall ? '🟢' : '🔴'} ${signal.signalType === 'CALL_BUY' ? 'CALL' : 'PUT'} ${signal.strike} ${signal.optionType}`}
+          {signal.signalType === 'NO_TRADE' ? 'NO TRADE' : `${isCall ? '🟢' : '🔴'} ${signal.signalType === 'CALL_BUY' ? 'CALL' : 'PUT'} ${signal.strike} ${signal.optionType ?? ''}`}
         </div>
         {signal.signalType !== 'NO_TRADE' && (
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
             Entry ₹{fmt(signal.entryLow, 0)} · SL ₹{fmt(signal.sl, 0)} · T1 ₹{fmt(signal.target1, 0)}
           </div>
         )}
         {signal.noTradeReason && (
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
             {signal.noTradeReason.slice(0, 60)}…
           </div>
         )}
       </div>
-      <div style={{ fontSize: '10px', fontWeight: 700, color: sc.color, flexShrink: 0 }}>
-        {sc.label.split(' ').slice(1).join(' ')}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: sc.color, background: sc.bg, padding: '3px 7px', borderRadius: '6px' }}>
+          {sc.label.split(' ').slice(1).join(' ')}
+        </div>
+        {onDelete && signal.id && (
+          <button
+            onClick={() => onDelete(signal)}
+            disabled={deleting === signal.id}
+            title="Delete signal"
+            style={{
+              background: 'rgba(244,63,94,0.1)',
+              border: '1px solid rgba(244,63,94,0.25)',
+              borderRadius: '6px',
+              color: 'var(--rose)',
+              cursor: 'pointer',
+              padding: '3px 7px',
+              fontSize: '12px',
+              lineHeight: 1,
+              opacity: deleting === signal.id ? 0.4 : 1,
+              transition: 'all 0.15s',
+            }}
+          >
+            🗑
+          </button>
+        )}
       </div>
     </div>
   );
@@ -643,15 +708,19 @@ function SignalsTab({
       {/* Today's trades */}
       {trades.length > 0 && (
         <>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '8px' }}>TODAY'S SETUPS ({trades.length})</div>
-          {trades.map((s, i) => (
-            <div key={s.id ?? i} style={{ position: 'relative' }}>
-              <TimelineItem signal={s} />
-              <div style={{ position: 'absolute', top: '50%', right: '12px', transform: 'translateY(-50%)' }}>
-                <DeleteBtn s={s} />
-              </div>
-            </div>
-          ))}
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '14px' }}>
+            TODAY'S SETUPS ({trades.length})
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {trades.map((s, i) => (
+              <TimelineItem
+                key={s.id ?? i}
+                signal={s}
+                onDelete={handleDel}
+                deleting={deleting}
+              />
+            ))}
+          </div>
         </>
       )}
 
@@ -664,7 +733,14 @@ function SignalsTab({
               <div key={s.id ?? i} style={{ padding: '8px 0', borderBottom: i < noTrades.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
-                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{formatTime(s.createdAt).slice(0, 5)}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+                        {formatTimeIST(s.createdAt)}
+                      </span>
+                      <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                        ({timeSince(s.createdAt)})
+                      </span>
+                    </div>
                     <span style={{ fontSize: '10px', color: 'var(--rose)' }}>Score: {s.signalScore}</span>
                   </div>
                   <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{s.noTradeReason?.slice(0, 100)}</div>
