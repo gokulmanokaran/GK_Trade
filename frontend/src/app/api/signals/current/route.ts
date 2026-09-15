@@ -97,6 +97,56 @@ export async function GET(req: NextRequest) {
       isLiveData,
     });
 
+    // ── Fix 2: Persist ENTRY_TRIGGERED signals to Supabase ─────────────────
+    // Only save when a real entry is confirmed. Use insert (not upsert) but
+    // guard against duplicates by checking if same strike+signal_type already
+    // exists in the last 60 minutes.
+    if (supabase && confluence.state === 'ENTRY_TRIGGERED') {
+      try {
+        const now = new Date();
+        const oneHourAgo = new Date(now.getTime() - 60 * 60 * 1000).toISOString();
+        const { data: existing } = await supabase
+          .from('signals')
+          .select('id')
+          .eq('strike', confluence.recommendedStrike ?? 0)
+          .eq('signal_type', confluence.signalType)
+          .gte('created_at', oneHourAgo)
+          .neq('status', 'DELETED')
+          .limit(1);
+
+        if (!existing || existing.length === 0) {
+          await supabase.from('signals').insert({
+            signal_type: confluence.signalType,
+            status: 'ENTRY_TRIGGERED',
+            strike: confluence.recommendedStrike,
+            option_type: confluence.optionType,
+            expiry: chain?.expiry ?? 'Weekly',
+            nifty_price: quote.ltp,
+            entry_low: confluence.entryPrice ? +(confluence.entryPrice - 2).toFixed(1) : quote.ltp,
+            entry_high: confluence.entryPrice ? +(confluence.entryPrice + 2).toFixed(1) : quote.ltp,
+            entry_trigger: `Enter ${confluence.instrumentName ?? confluence.optionType} at target ₹${confluence.optionLtp ?? 0}`,
+            sl: confluence.sl,
+            sl_reason: confluence.invalidationCondition ?? 'Retest swing or VWAP break',
+            target1: confluence.target1,
+            target2: confluence.target2,
+            rr_ratio: confluence.rrRatio,
+            signal_score: confluence.confidenceScore,
+            confidence: confluence.confidenceScore,
+            regime: confluence.direction === 'CE' ? 'BULLISH' : 'BEARISH',
+            trend_direction: confluence.direction,
+            technical_reason: confluence.summaryReason,
+            oi_reason: chain?.pcr ? `PCR: ${chain.pcr.toFixed(2)}` : 'OI Analysis',
+            chain_reason: `ATM: ${chain?.atmStrike ?? Math.round(quote.ltp / 50) * 50}`,
+            created_at: now.toISOString(),
+          });
+          console.log('[signals/current] Saved ENTRY_TRIGGERED signal to Supabase:', confluence.signalType, confluence.recommendedStrike);
+        }
+      } catch (saveErr) {
+        console.warn('[signals/current] Failed to save signal to Supabase (non-fatal):', saveErr);
+      }
+    }
+
+
     const fallbackSignal = {
       id: `live-${Date.now()}`,
       signalType: confluence.signalType,

@@ -25,6 +25,7 @@ export async function GET(req: NextRequest) {
             signal_events(*)
           `)
           .gte('created_at', `${today}T00:00:00+05:30`)
+          .neq('status', 'DELETED')
           .order('created_at', { ascending: true });
 
         if (signals && signals.length > 0) {

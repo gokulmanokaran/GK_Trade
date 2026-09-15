@@ -587,9 +587,43 @@ function TimelineItem({ signal }: { signal: Signal }) {
 // ═══════════════════════════════════════════════════════════════
 // SIGNALS TAB
 // ═══════════════════════════════════════════════════════════════
-function SignalsTab({ signal, todaySignals, loading }: { signal: Signal | null; todaySignals: Signal[]; loading: boolean }) {
-  const trades = todaySignals.filter(s => s.signalType !== 'NO_TRADE');
+function SignalsTab({
+  signal, todaySignals, loading, onDelete,
+}: {
+  signal: Signal | null;
+  todaySignals: Signal[];
+  loading: boolean;
+  onDelete: (id: string) => void;
+}) {
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  const handleDel = async (s: Signal) => {
+    if (!s.id) return;
+    if (!window.confirm(`Delete this ${s.signalType === 'CALL_BUY' ? 'CALL' : s.signalType === 'PUT_BUY' ? 'PUT' : ''} signal?`)) return;
+    setDeleting(s.id);
+    await onDelete(s.id);
+    setDeleting(null);
+  };
+
+  const trades   = todaySignals.filter(s => s.signalType !== 'NO_TRADE');
   const noTrades = todaySignals.filter(s => s.signalType === 'NO_TRADE');
+
+  const DeleteBtn = ({ s }: { s: Signal }) => s.id ? (
+    <button
+      onClick={() => handleDel(s)}
+      disabled={deleting === s.id}
+      title="Delete signal"
+      style={{
+        background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)',
+        borderRadius: '8px', color: 'var(--rose)', cursor: 'pointer',
+        padding: '4px 8px', fontSize: '14px', lineHeight: 1,
+        opacity: deleting === s.id ? 0.4 : 1,
+        transition: 'all 0.15s',
+      }}
+    >
+      🗑
+    </button>
+  ) : null;
 
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
@@ -598,7 +632,10 @@ function SignalsTab({ signal, todaySignals, loading }: { signal: Signal | null; 
       {/* Current signal */}
       {signal && signal.signalType !== 'NO_TRADE' && (
         <>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>CURRENT SIGNAL</div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>CURRENT SIGNAL</div>
+            <DeleteBtn s={signal} />
+          </div>
           <SignalCard signal={signal} compact={false} />
         </>
       )}
@@ -607,7 +644,14 @@ function SignalsTab({ signal, todaySignals, loading }: { signal: Signal | null; 
       {trades.length > 0 && (
         <>
           <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '8px' }}>TODAY'S SETUPS ({trades.length})</div>
-          {trades.map((s, i) => <TimelineItem key={i} signal={s} />)}
+          {trades.map((s, i) => (
+            <div key={s.id ?? i} style={{ position: 'relative' }}>
+              <TimelineItem signal={s} />
+              <div style={{ position: 'absolute', top: '50%', right: '12px', transform: 'translateY(-50%)' }}>
+                <DeleteBtn s={s} />
+              </div>
+            </div>
+          ))}
         </>
       )}
 
@@ -617,12 +661,15 @@ function SignalsTab({ signal, todaySignals, loading }: { signal: Signal | null; 
           <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '16px' }}>NO-TRADE LOG ({noTrades.length})</div>
           <div className="card" style={{ padding: '12px' }}>
             {noTrades.map((s, i) => (
-              <div key={i} style={{ padding: '8px 0', borderBottom: i < noTrades.length - 1 ? '1px solid var(--border)' : 'none' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{formatTime(s.createdAt).slice(0, 5)}</span>
-                  <span style={{ fontSize: '10px', color: 'var(--rose)' }}>Score: {s.signalScore}</span>
+              <div key={s.id ?? i} style={{ padding: '8px 0', borderBottom: i < noTrades.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '2px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>{formatTime(s.createdAt).slice(0, 5)}</span>
+                    <span style={{ fontSize: '10px', color: 'var(--rose)' }}>Score: {s.signalScore}</span>
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{s.noTradeReason?.slice(0, 100)}</div>
                 </div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{s.noTradeReason?.slice(0, 100)}</div>
+                <DeleteBtn s={s} />
               </div>
             ))}
           </div>
@@ -645,6 +692,8 @@ function SignalsTab({ signal, todaySignals, loading }: { signal: Signal | null; 
     </div>
   );
 }
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // OPTION CHAIN TAB
@@ -1053,7 +1102,17 @@ function BottomNav({ active, onChange }: { active: string; onChange: (tab: strin
 // MAIN APP
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
-  const [tab, setTab] = useState('home');
+  // ── Fix 1: Persist active tab across hard refreshes ────────────────────────
+  const [tab, setTab] = useState<string>(() => {
+    if (typeof window !== 'undefined') return localStorage.getItem('gk_active_tab') ?? 'home';
+    return 'home';
+  });
+
+  const handleTabChange = (t: string) => {
+    setTab(t);
+    localStorage.setItem('gk_active_tab', t);
+  };
+
   const [loading, setLoading] = useState(true);
   const [quote, setQuote] = useState<Quote | null>(null);
   const [signal, setSignal] = useState<Signal | null>(null);
@@ -1136,6 +1195,20 @@ export default function App() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
+  // ── Fix 3: Delete a signal (optimistic UI + API) ──────────────────────────
+  const handleDelete = async (id: string) => {
+    // Optimistic: remove from local state immediately
+    setTodaySignals(prev => prev.filter(s => s.id !== id));
+    if (signal?.id === id) setSignal(null);
+
+    // Persist to DB (fire-and-forget; failure is non-fatal)
+    try {
+      await fetch(`/api/signals/${id}`, { method: 'DELETE' });
+    } catch (e) {
+      console.warn('[handleDelete] API call failed (signal removed from UI anyway):', e);
+    }
+  };
+
   return (
     <>
       {/* Demo banner */}
@@ -1156,11 +1229,11 @@ export default function App() {
             onRefresh={fetchAll}
             todaySignals={todaySignals}
             missedSignals={missedSignals}
-            onSelectTab={setTab}
+            onSelectTab={handleTabChange}
           />
         )}
         {tab === 'signals' && (
-          <SignalsTab signal={signal} todaySignals={todaySignals} loading={loading} />
+          <SignalsTab signal={signal} todaySignals={todaySignals} loading={loading} onDelete={handleDelete} />
         )}
         {tab === 'chain' && (
           <ChainTab chain={chain} loading={loading} />
@@ -1177,7 +1250,7 @@ export default function App() {
       </main>
 
       {/* Bottom Nav */}
-      <BottomNav active={tab} onChange={setTab} />
+      <BottomNav active={tab} onChange={handleTabChange} />
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
