@@ -1,6 +1,6 @@
 // ============================================================
 // Server-Side Web Push Notification Service
-// With Guaranteed Deduplication via Supabase notification_deliveries
+// With Guaranteed Deduplication via Supabase notification_deliveries.
 // ============================================================
 
 import webpush from 'web-push';
