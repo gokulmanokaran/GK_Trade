@@ -16,9 +16,12 @@ from backend.routers.options import router as options_router
 from backend.routers.signals import router as signals_router
 from backend.routers.trading import router as trading_router
 from backend.routers.websocket_manager import manager as ws_manager
+from monitoring.service import MarketMonitoringService
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("optionpulse.main")
+
+monitoring_service = MarketMonitoringService()
 
 
 @asynccontextmanager
@@ -27,12 +30,17 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("OptionPulse Database successfully initialized.")
 
-    # Background task for WebSocket tick broadcasting
+    # Start persistent background market monitoring daemon and WebSocket tick broadcasting
+    logger.info("Starting background MarketMonitoringService...")
+    monitoring_task = asyncio.create_task(monitoring_service.start())
     tick_task = asyncio.create_task(periodic_tick_broadcast())
     yield
+    logger.info("Shutting down background tasks...")
+    await monitoring_service.stop()
+    monitoring_task.cancel()
     tick_task.cancel()
     try:
-        await tick_task
+        await asyncio.gather(monitoring_task, tick_task, return_exceptions=True)
     except asyncio.CancelledError:
         pass
     logger.info("OptionPulse backend shutting down.")

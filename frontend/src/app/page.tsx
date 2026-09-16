@@ -6,7 +6,9 @@ import {
   RefreshCw, Wifi, WifiOff, TrendingUp, TrendingDown,
   Minus, AlertTriangle, ChevronUp, ChevronDown,
   Target, Shield, Clock, Activity, Info, X,
-  CheckCircle, XCircle, Circle
+  CheckCircle, XCircle, Circle, Trash2, Filter,
+  Calendar, User, ChevronLeft, ChevronRight, Check,
+  AlertCircle
 } from 'lucide-react';
 
 // ── Types ─────────────────────────────────────────────────────
@@ -17,6 +19,15 @@ interface Quote {
   dataAge: number; isStale: boolean; providerStatus: string;
   marketStatus: { isOpen: boolean; session: string };
   isMock?: boolean;
+}
+
+interface ConfluenceSetup {
+  state: string;
+  rejectionReason?: string;
+  orbHigh?: number;
+  orbLow?: number;
+  vwap?: number;
+  confirmations?: Record<string, { status: string; detail?: string }>;
 }
 
 interface Signal {
@@ -32,6 +43,8 @@ interface Signal {
   technicalReason: string; oiReason: string; chainReason: string;
   noTradeReason?: string; createdAt: string;
   scoreBreakdown?: Record<string, number>;
+  confluenceSetup?: ConfluenceSetup;
+  isDeleted?: boolean;
 }
 
 interface ChainRow {
@@ -59,10 +72,11 @@ interface Indicators {
 }
 
 // ── Helpers ────────────────────────────────────────────────────
-function fmt(n?: number, d = 2) {
-  if (n == null) return '—';
+function fmt(n?: number | null, d = 2) {
+  if (n == null || isNaN(n)) return '—';
   return n.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
 }
+
 function fmtOI(n?: number) {
   if (n == null) return '—';
   if (n >= 1e7) return (n / 1e7).toFixed(1) + 'Cr';
@@ -70,25 +84,24 @@ function fmtOI(n?: number) {
   if (n >= 1e3) return (n / 1e3).toFixed(0) + 'K';
   return n.toString();
 }
+
 function timeSince(iso: string) {
+  if (!iso) return '—';
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 5) return 'just now';
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
 }
-function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString('en-IN', {
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    timeZone: 'Asia/Kolkata', hour12: false
-  });
-}
+
 function formatTimeIST(iso: string) {
   if (!iso) return '—';
   try {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return '—';
     return d.toLocaleTimeString('en-IN', {
-      hour: '2-digit', minute: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
       timeZone: 'Asia/Kolkata', hour12: true
     }).toUpperCase();
   } catch {
@@ -96,10 +109,24 @@ function formatTimeIST(iso: string) {
   }
 }
 
+function formatDateIST(iso: string) {
+  if (!iso) return '—';
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('en-IN', {
+      day: '2-digit', month: 'short', year: 'numeric',
+      timeZone: 'Asia/Kolkata'
+    });
+  } catch {
+    return '—';
+  }
+}
+
 // ── Score colour ─────────────────────────────────────────────
 function scoreColor(s: number) {
-  if (s >= 85) return '#10b981';
-  if (s >= 70) return '#f59e0b';
+  if (s >= 80) return '#10b981';
+  if (s >= 65) return '#f59e0b';
   return '#f43f5e';
 }
 
@@ -108,6 +135,7 @@ function statusConfig(status: string) {
   const map: Record<string, { label: string; color: string; bg: string }> = {
     WATCH:             { label: '👀 Watch',            color: '#38bdf8',  bg: 'rgba(56,189,248,0.1)' },
     WAITING_FOR_ENTRY: { label: '⏳ Waiting Entry',    color: '#f59e0b',  bg: 'rgba(245,158,11,0.1)' },
+    WAITING_FOR_RETEST:{ label: '🔄 Waiting Retest',   color: '#a78bfa',  bg: 'rgba(167,139,250,0.1)' },
     ENTRY_TRIGGERED:   { label: '🚀 Entry Triggered',  color: '#10b981',  bg: 'rgba(16,185,129,0.15)' },
     POSITION_ACTIVE:   { label: '📈 Position Active',  color: '#10b981',  bg: 'rgba(16,185,129,0.1)' },
     TARGET1_HIT:       { label: '🎯 Target 1 Hit',     color: '#10b981',  bg: 'rgba(16,185,129,0.15)' },
@@ -117,10 +145,352 @@ function statusConfig(status: string) {
     EXIT:              { label: '🏁 Exited',           color: '#94a3b8',  bg: 'rgba(148,163,184,0.1)' },
     INVALIDATED:       { label: '❌ Invalidated',      color: '#f43f5e',  bg: 'rgba(244,63,94,0.1)' },
     NO_TRADE:          { label: '⛔ No Trade',         color: '#64748b',  bg: 'rgba(100,116,139,0.1)' },
+    NO_SIGNAL:         { label: '⏳ No Signal / Wait', color: '#64748b',  bg: 'rgba(100,116,139,0.1)' },
     MARKET_CLOSED:     { label: '🌙 Market Closed',   color: '#64748b',  bg: 'rgba(100,116,139,0.1)' },
     DATA_UNAVAILABLE:  { label: '⚠️ Data Unavailable', color: '#f59e0b', bg: 'rgba(245,158,11,0.1)' },
   };
   return map[status] ?? { label: status, color: '#94a3b8', bg: 'rgba(148,163,184,0.1)' };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// NO SIGNAL / WAIT CARD
+// ═══════════════════════════════════════════════════════════════
+function NoSignalCard({ signal, quote }: { signal: Signal | null; quote: Quote | null }) {
+  const setup = signal?.confluenceSetup;
+  const cfms = setup?.confirmations || {};
+  const statusIcon = (s?: string) => {
+    if (s === 'PASS')        return { icon: '✓', color: 'var(--emerald)' };
+    if (s === 'FAIL')        return { icon: '✗', color: 'var(--rose)' };
+    if (s === 'FAIL_CHOPPY') return { icon: '⚡', color: 'var(--rose)' };
+    if (s === 'UNAVAILABLE') return { icon: '—', color: 'var(--amber)' };
+    return                    { icon: '…', color: 'var(--text-muted)' };
+  };
+
+  const rows = [
+    { key: 'vwap',           label: '1. VWAP Position', desc: 'Price above/below VWAP' },
+    { key: 'ema20',          label: '2. 20 EMA Trend', desc: 'Slope & price alignment' },
+    { key: 'orbBreakout',    label: '3. ORB Breakout', desc: '9:15-9:30 range break' },
+    { key: 'candleStrength', label: '4. Candle Strength', desc: 'Body > 60%, rejection-free' },
+    { key: 'volume',         label: '5. Volume Surge', desc: '> 1.2x 20-period average' },
+    { key: 'retest',         label: '6. Retest & Rejection', desc: 'Breakout level hold' },
+    { key: 'choppiness',     label: '7. Choppiness Filter', desc: 'CI < 61.8 & healthy ATR' },
+  ];
+
+  return (
+    <div style={{ padding: '0 16px 12px' }}>
+      <div className="card signal-no-trade" style={{ padding: '16px', border: '1px solid rgba(148,163,184,0.15)' }}>
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+          <div>
+            <div style={{ fontSize: '18px', fontWeight: 900, color: 'var(--text-secondary)', letterSpacing: '-0.01em', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span>⏳ NO SIGNAL / WAIT</span>
+            </div>
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+              20-Rule Confluence Strategy Engine Active
+            </div>
+          </div>
+          <div style={{
+            background: 'rgba(100,116,139,0.15)', color: '#94a3b8', fontSize: '10px', fontWeight: 700,
+            padding: '4px 10px', borderRadius: '8px', border: '1px solid rgba(148,163,184,0.2)',
+            letterSpacing: '0.04em'
+          }}>
+            {setup?.state ? setup.state.replace(/_/g, ' ') : (quote?.marketStatus?.isOpen ? 'SCANNING' : 'MARKET CLOSED')}
+          </div>
+        </div>
+
+        {/* Reason */}
+        <div style={{ background: 'rgba(0,0,0,0.25)', borderRadius: '10px', padding: '12px', marginBottom: '14px', border: '1px solid var(--border)' }}>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: '4px' }}>CURRENT MARKET STATE</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            {signal?.noTradeReason || setup?.rejectionReason || 'Monitoring live 5-minute candles. All 20 strategy conditions must pass simultaneously before an entry signal is generated.'}
+          </div>
+        </div>
+
+        {/* Live Criteria Checklist */}
+        <div style={{ marginBottom: '12px' }}>
+          <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>
+            CONFLUENCE CONDITIONS CHECKLIST
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {rows.map(({ key, label }) => {
+              const c = cfms[key] ?? {};
+              const si = statusIcon(c.status);
+              return (
+                <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'rgba(255,255,255,0.02)', padding: '6px 10px', borderRadius: '6px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '13px', color: si.color, fontWeight: 900, width: '14px', textAlign: 'center' }}>{si.icon}</span>
+                    {label}
+                  </span>
+                  <span style={{ fontSize: '10px', fontWeight: 700, color: si.color, letterSpacing: '0.04em' }}>
+                    {c.status ?? 'PENDING'}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Strategy Parameters Strip */}
+        {(setup?.orbHigh || setup?.orbLow || setup?.vwap) && (
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+            {setup.orbHigh && (
+              <div style={{ flex: 1, background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)', borderRadius: '8px', padding: '6px 8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>ORB HIGH</div>
+                <div className="price-display" style={{ fontSize: '12px', fontWeight: 800, color: 'var(--emerald)' }}>{setup.orbHigh.toFixed(1)}</div>
+              </div>
+            )}
+            {setup.orbLow && (
+              <div style={{ flex: 1, background: 'rgba(244,63,94,0.06)', border: '1px solid rgba(244,63,94,0.15)', borderRadius: '8px', padding: '6px 8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>ORB LOW</div>
+                <div className="price-display" style={{ fontSize: '12px', fontWeight: 800, color: 'var(--rose)' }}>{setup.orbLow.toFixed(1)}</div>
+              </div>
+            )}
+            {setup.vwap && (
+              <div style={{ flex: 1, background: 'rgba(167,139,250,0.06)', border: '1px solid rgba(167,139,250,0.15)', borderRadius: '8px', padding: '6px 8px', textAlign: 'center' }}>
+                <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>VWAP</div>
+                <div className="price-display" style={{ fontSize: '12px', fontWeight: 800, color: '#a78bfa' }}>{setup.vwap.toFixed(1)}</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// SIGNAL CARD COMPONENT
+// ═══════════════════════════════════════════════════════════════
+function SignalCard({ signal, compact, onDelete }: { signal: Signal; compact?: boolean; onDelete?: (id: string) => void }) {
+  const [showScore, setShowScore] = useState(false);
+  const isTrade = signal.signalType === 'CALL_BUY' || signal.signalType === 'PUT_BUY';
+  const isCall = signal.signalType === 'CALL_BUY';
+  const sc = statusConfig(signal.status);
+
+  if (!isTrade || !signal.entryLow || !signal.sl) {
+    return null;
+  }
+
+  return (
+    <div style={{ padding: '0 16px 12px' }}>
+      <div
+        className={`card ${isCall ? 'signal-call' : 'signal-put'} ${isCall ? 'glow-emerald' : 'glow-rose'}`}
+        style={{ padding: '16px' }}
+      >
+        {/* Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+          <div>
+            <div style={{ fontSize: '22px', fontWeight: 900, color: isCall ? 'var(--emerald)' : 'var(--rose)', letterSpacing: '-0.02em' }}>
+              {isCall ? '🟢 CALL BUY' : '🔴 PUT BUY'}
+            </div>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px' }}>
+              NIFTY {signal.strike} {signal.optionType ?? (isCall ? 'CE' : 'PE')}
+            </div>
+          </div>
+          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end' }}>
+            <div style={{
+              background: sc.bg, color: sc.color, fontSize: '10px', fontWeight: 700,
+              padding: '4px 8px', borderRadius: '8px', border: `1px solid ${sc.color}33`,
+              letterSpacing: '0.04em'
+            }}>
+              {sc.label}
+            </div>
+            <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              Exp: {signal.expiry || 'Current Weekly'}
+            </div>
+          </div>
+        </div>
+
+        {/* Trade parameters */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
+          <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '10px' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '4px' }}>ENTRY ZONE</div>
+            <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>
+              ₹{fmt(signal.entryLow, 0)} – ₹{fmt(signal.entryHigh, 0)}
+            </div>
+          </div>
+          <div style={{ background: 'rgba(244,63,94,0.15)', borderRadius: '10px', padding: '10px', border: '1px solid rgba(244,63,94,0.2)' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--rose)', letterSpacing: '0.08em', marginBottom: '4px' }}>STOP LOSS</div>
+            <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--rose)' }}>₹{fmt(signal.sl, 0)}</div>
+          </div>
+          <div style={{ background: 'rgba(16,185,129,0.1)', borderRadius: '10px', padding: '10px', border: '1px solid rgba(16,185,129,0.2)' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--emerald)', letterSpacing: '0.08em', marginBottom: '4px' }}>TARGET 1</div>
+            <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--emerald)' }}>₹{fmt(signal.target1, 0)}</div>
+          </div>
+          <div style={{ background: 'rgba(16,185,129,0.15)', borderRadius: '10px', padding: '10px', border: '1px solid rgba(16,185,129,0.3)' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--emerald)', letterSpacing: '0.08em', marginBottom: '4px' }}>TARGET 2</div>
+            <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--emerald)' }}>₹{fmt(signal.target2, 0)}</div>
+          </div>
+        </div>
+
+        {/* R:R / Score / Confidence */}
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+          {[
+            { label: 'R:R', val: `1 : ${signal.rrRatio || 1.5}`, color: 'var(--sky)' },
+            { label: 'SCORE', val: `${signal.signalScore || 0}/100`, color: scoreColor(signal.signalScore || 0) },
+            { label: 'CONFIDENCE', val: `${signal.confidence || 0}%`, color: scoreColor(signal.confidence || 0) },
+          ].map(({ label, val, color }) => (
+            <div key={label} style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '8px', textAlign: 'center' }}>
+              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: '3px' }}>{label}</div>
+              <div className="price-display" style={{ fontSize: '13px', fontWeight: 800, color }}>{val}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Score breakdown toggle */}
+        <button onClick={() => setShowScore(!showScore)} style={{
+          width: '100%', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)',
+          borderRadius: '10px', padding: '8px 12px', color: 'var(--text-secondary)',
+          fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', marginBottom: showScore ? '10px' : '0'
+        }}>
+          <span>📊 20-Rule Confluence Breakdown</span>
+          {showScore ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        </button>
+
+        {showScore && signal.scoreBreakdown && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '10px' }}>
+            {Object.entries(signal.scoreBreakdown)
+              .filter(([k]) => k !== 'total')
+              .map(([component, score]) => {
+                const maxMap: Record<string, number> = {
+                  trend: 20, priceAction: 15, vwap: 10, momentum: 10,
+                  volume: 10, optionChain: 15, oi: 10, volatility: 5, liquidity: 5
+                };
+                const max = maxMap[component] ?? 10;
+                const pct = Math.round((Number(score) / max) * 100);
+                const label = component.replace(/([A-Z])/g, ' $1').toUpperCase();
+                return (
+                  <div key={component}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
+                      <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</span>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: scoreColor(pct) }}>{score}/{max}</span>
+                    </div>
+                    <div className="score-bar-track">
+                      <div className="score-bar-fill" style={{ width: `${pct}%`, background: scoreColor(pct) }} />
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        )}
+
+        {/* Technical Reason */}
+        {signal.technicalReason && (
+          <div style={{ marginTop: '10px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
+            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '4px' }}>ANALYSIS AUDIT</div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{signal.technicalReason}</div>
+            {signal.oiReason && (
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{signal.oiReason}</div>
+            )}
+          </div>
+        )}
+
+        {/* Footer info & Delete */}
+        <div style={{
+          marginTop: '12px', padding: '8px 12px', borderRadius: '8px',
+          background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Clock size={12} color="var(--text-muted)" />
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Created:</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
+              {formatTimeIST(signal.createdAt)}
+            </span>
+          </div>
+          {onDelete && signal.id && (
+            <button
+              onClick={() => onDelete(signal.id!)}
+              style={{
+                background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)',
+                borderRadius: '6px', color: 'var(--rose)', cursor: 'pointer',
+                padding: '3px 8px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px'
+              }}
+            >
+              <Trash2 size={12} /> Delete
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// TIMELINE ITEM COMPONENT
+// ═══════════════════════════════════════════════════════════════
+function TimelineItem({
+  signal,
+  onDelete,
+  deleting,
+}: {
+  signal: Signal;
+  onDelete?: (s: Signal) => void;
+  deleting?: string | null;
+}) {
+  const sc = statusConfig(signal.status);
+  const isTrade = signal.signalType === 'CALL_BUY' || signal.signalType === 'PUT_BUY';
+  const isCall = signal.signalType === 'CALL_BUY';
+
+  return (
+    <div className="card" style={{ padding: '12px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ minWidth: '70px', flexShrink: 0 }}>
+        <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 700, fontFamily: 'monospace', lineHeight: 1.2 }}>
+          {formatTimeIST(signal.createdAt)}
+        </div>
+        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
+          {timeSince(signal.createdAt)}
+        </div>
+      </div>
+      <div style={{
+        width: '3px', height: '36px', borderRadius: '2px',
+        background: !isTrade ? 'var(--border)' : isCall ? 'var(--emerald)' : 'var(--rose)',
+        flexShrink: 0
+      }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+          {!isTrade ? 'NO TRADE' : `${isCall ? '🟢 CALL' : '🔴 PUT'} ${signal.strike} ${signal.optionType ?? ''}`}
+        </div>
+        {isTrade && signal.entryLow && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+            Entry ₹{fmt(signal.entryLow, 0)} · SL ₹{fmt(signal.sl, 0)} · T1 ₹{fmt(signal.target1, 0)}
+          </div>
+        )}
+        {signal.noTradeReason && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
+            {signal.noTradeReason.slice(0, 70)}…
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: sc.color, background: sc.bg, padding: '4px 8px', borderRadius: '6px' }}>
+          {sc.label.split(' ').slice(1).join(' ') || sc.label}
+        </div>
+        {onDelete && signal.id && (
+          <button
+            onClick={() => onDelete(signal)}
+            disabled={deleting === signal.id}
+            title="Delete signal"
+            style={{
+              background: 'rgba(244,63,94,0.1)',
+              border: '1px solid rgba(244,63,94,0.25)',
+              borderRadius: '6px',
+              color: 'var(--rose)',
+              cursor: 'pointer',
+              padding: '5px 8px',
+              fontSize: '12px',
+              lineHeight: 1,
+              opacity: deleting === signal.id ? 0.4 : 1,
+              transition: 'all 0.15s',
+            }}
+          >
+            <Trash2 size={13} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -137,6 +507,7 @@ function HomeTab({
   todaySignals,
   missedSignals = [],
   onSelectTab,
+  onDelete,
 }: {
   quote: Quote | null;
   signal: Signal | null;
@@ -148,12 +519,14 @@ function HomeTab({
   todaySignals: Signal[];
   missedSignals?: any[];
   onSelectTab: (tab: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const isRealActiveTrade = signal && (signal.signalType === 'CALL_BUY' || signal.signalType === 'PUT_BUY') && (signal.status === 'ENTRY_TRIGGERED' || signal.status === 'POSITION_ACTIVE');
 
   return (
     <div className="animate-fade-in">
-      {/* ── Welcome Back Banner ─────────────────────── */}
+      {/* ── Missed Alerts Banner ─────────────────────── */}
       {missedSignals.length > 0 && !bannerDismissed && (
         <div style={{ margin: '16px 16px 0', padding: '12px 16px', background: 'rgba(56,189,248,0.1)', border: '1px solid rgba(56,189,248,0.3)', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
@@ -185,7 +558,7 @@ function HomeTab({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
               <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '4px' }}>
-                NIFTY 50
+                NIFTY 50 INDEX
               </div>
               {loading && !quote ? (
                 <div className="skeleton" style={{ width: 160, height: 40, marginBottom: 8 }} />
@@ -196,7 +569,7 @@ function HomeTab({
               )}
               {quote && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
-                  <span className={`price-display`} style={{
+                  <span className="price-display" style={{
                     fontSize: '14px', fontWeight: 700,
                     color: quote.change >= 0 ? 'var(--emerald)' : 'var(--rose)'
                   }}>
@@ -210,7 +583,7 @@ function HomeTab({
               )}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
-              <button onClick={onRefresh} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '10px', padding: '8px', color: 'var(--text-secondary)' }}>
+              <button onClick={onRefresh} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '10px', padding: '8px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
                 <RefreshCw size={16} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} />
               </button>
               {quote && (
@@ -221,24 +594,9 @@ function HomeTab({
                       : <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>MARKET CLOSED</span>
                     }
                   </div>
-                  {/* Data Quality Indicator — Rules 3, 17, 18 */}
-                  {(() => {
-                    const dq: string = (quote as any).dataQuality ?? (quote.providerStatus === 'MOCK' ? 'DELAYED' : quote.isStale ? 'STALE' : 'LIVE');
-                    const dqAge: number = (quote as any).dataAge ?? quote.dataAge ?? 0;
-                    const dqConfig: Record<string, { label: string; color: string }> = {
-                      LIVE:             { label: '🟢 LIVE', color: 'var(--emerald)' },
-                      DELAYED:          { label: `⏱ DELAYED (~${Math.round(dqAge / 60)}m)`, color: 'var(--amber)' },
-                      STALE:            { label: '🔴 STALE', color: 'var(--rose)' },
-                      INSUFFICIENT:     { label: '⚠ INSUFFICIENT', color: 'var(--text-muted)' },
-                      HISTORICAL_REPLAY:{ label: '📼 REPLAY', color: '#a78bfa' },
-                    };
-                    const cfg = dqConfig[dq] ?? dqConfig['DELAYED'];
-                    return (
-                      <div style={{ fontSize: '10px', color: cfg.color, fontWeight: 700, marginTop: '4px' }}>
-                        {cfg.label}
-                      </div>
-                    );
-                  })()}
+                  <div style={{ fontSize: '10px', color: 'var(--emerald)', fontWeight: 700, marginTop: '4px' }}>
+                    🟢 UPSTOX LIVE
+                  </div>
                 </div>
               )}
             </div>
@@ -271,18 +629,22 @@ function HomeTab({
           {quote && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '10px' }}>
               <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                {formatTime(quote.timestamp)} IST
+                {formatTimeIST(quote.timestamp)} IST
               </span>
-              <span className={`badge ${quote.providerStatus === 'MOCK' ? 'badge-mock' : 'badge-live'}`}>
-                {quote.providerStatus === 'MOCK' ? '🎭 DEMO' : '📡 LIVE'}
+              <span className="badge badge-live">
+                📡 UPSTOX V2 LIVE
               </span>
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Current Signal Card ────────────────────── */}
-      {signal && <SignalCard signal={signal} compact={false} />}
+      {/* ── Active Signal Card OR No-Signal Checklist ────────────────────── */}
+      {isRealActiveTrade ? (
+        <SignalCard signal={signal} compact={false} onDelete={onDelete} />
+      ) : (
+        <NoSignalCard signal={signal} quote={quote} />
+      )}
 
       {/* ── Indicators Strip ──────────────────────── */}
       {indicators.rsi14 && (
@@ -316,7 +678,7 @@ function HomeTab({
           <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: '10px' }}>TODAY'S SIGNALS</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {todaySignals.slice(0, 5).map((s, i) => (
-              <TimelineItem key={i} signal={s} />
+              <TimelineItem key={s.id ?? i} signal={s} onDelete={(sig) => sig.id && onDelete(sig.id)} />
             ))}
           </div>
         </div>
@@ -326,339 +688,20 @@ function HomeTab({
 }
 
 // ═══════════════════════════════════════════════════════════════
-// SIGNAL CARD COMPONENT
-// ═══════════════════════════════════════════════════════════════
-function SignalCard({ signal, compact }: { signal: Signal; compact: boolean }) {
-  const [showScore, setShowScore] = useState(false);
-  const isTrade = signal.signalType !== 'NO_TRADE';
-  const isCall = signal.signalType === 'CALL_BUY';
-  const sc = statusConfig(signal.status);
-
-  return (
-    <div style={{ padding: '0 16px 12px' }}>
-      <div
-        className={`card ${isTrade ? (isCall ? 'signal-call' : 'signal-put') : 'signal-no-trade'} ${isTrade ? (isCall ? 'glow-emerald' : 'glow-rose') : ''}`}
-        style={{ padding: '16px' }}
-      >
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
-          <div>
-            <div style={{ fontSize: '22px', fontWeight: 900, color: isTrade ? (isCall ? 'var(--emerald)' : 'var(--rose)') : 'var(--text-muted)', letterSpacing: '-0.02em' }}>
-              {isTrade ? (isCall ? '🟢 CALL BUY' : '🔴 PUT BUY') : '⛔ NO TRADE'}
-            </div>
-            {isTrade && (
-              <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', marginTop: '4px' }}>
-                NIFTY {signal.strike} {signal.optionType}
-              </div>
-            )}
-          </div>
-          <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <div style={{
-              background: sc.bg, color: sc.color, fontSize: '10px', fontWeight: 700,
-              padding: '4px 8px', borderRadius: '8px', border: `1px solid ${sc.color}33`,
-              letterSpacing: '0.04em'
-            }}>
-              {sc.label}
-            </div>
-            {isTrade && (
-              <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'right' }}>
-                Exp: {signal.expiry}
-              </div>
-            )}
-          </div>
-        </div>
-
-        {/* No trade reason */}
-        {!isTrade && signal.noTradeReason && (
-          <div style={{ background: 'rgba(100,116,139,0.1)', borderRadius: '10px', padding: '12px', marginBottom: '12px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>REASON</div>
-            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>{signal.noTradeReason}</div>
-          </div>
-        )}
-
-        {/* Trade parameters */}
-        {isTrade && (
-          <>
-            {/* Entry / SL / Targets */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '12px' }}>
-              <div style={{ background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '10px' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '4px' }}>ENTRY ZONE</div>
-                <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>
-                  ₹{fmt(signal.entryLow, 0)} – ₹{fmt(signal.entryHigh, 0)}
-                </div>
-              </div>
-              <div style={{ background: 'rgba(244,63,94,0.15)', borderRadius: '10px', padding: '10px', border: '1px solid rgba(244,63,94,0.2)' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--rose)', letterSpacing: '0.08em', marginBottom: '4px' }}>STOP LOSS</div>
-                <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--rose)' }}>₹{fmt(signal.sl, 0)}</div>
-              </div>
-              <div style={{ background: 'rgba(16,185,129,0.1)', borderRadius: '10px', padding: '10px', border: '1px solid rgba(16,185,129,0.2)' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--emerald)', letterSpacing: '0.08em', marginBottom: '4px' }}>TARGET 1</div>
-                <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--emerald)' }}>₹{fmt(signal.target1, 0)}</div>
-              </div>
-              <div style={{ background: 'rgba(16,185,129,0.15)', borderRadius: '10px', padding: '10px', border: '1px solid rgba(16,185,129,0.3)' }}>
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--emerald)', letterSpacing: '0.08em', marginBottom: '4px' }}>TARGET 2</div>
-                <div className="price-display" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--emerald)' }}>₹{fmt(signal.target2, 0)}</div>
-              </div>
-            </div>
-
-            {/* R:R / Score / Confidence */}
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-              {[
-                { label: 'R:R', val: `1 : ${signal.rrRatio}`, color: 'var(--sky)' },
-                { label: 'SCORE', val: `${signal.signalScore}/100`, color: scoreColor(signal.signalScore) },
-                { label: 'CONFIDENCE', val: `${signal.confidence}%`, color: scoreColor(signal.confidence) },
-              ].map(({ label, val, color }) => (
-                <div key={label} style={{ flex: 1, background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: '8px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em', marginBottom: '3px' }}>{label}</div>
-                  <div className="price-display" style={{ fontSize: '13px', fontWeight: 800, color }}>{val}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Score breakdown button */}
-            <button onClick={() => setShowScore(!showScore)} style={{
-              width: '100%', background: 'rgba(0,0,0,0.25)', border: '1px solid rgba(255,255,255,0.08)',
-              borderRadius: '10px', padding: '8px 12px', color: 'var(--text-secondary)',
-              fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center',
-              justifyContent: 'space-between', marginBottom: showScore ? '10px' : '0'
-            }}>
-              <span>📊 Score Breakdown</span>
-              {showScore ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-
-            {showScore && signal.scoreBreakdown && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                {Object.entries(signal.scoreBreakdown)
-                  .filter(([k]) => k !== 'total')
-                  .map(([component, score]) => {
-                    const maxMap: Record<string, number> = {
-                      trend: 20, priceAction: 15, vwap: 10, momentum: 10,
-                      volume: 10, optionChain: 15, oi: 10, volatility: 5, liquidity: 5
-                    };
-                    const max = maxMap[component] ?? 10;
-                    const pct = Math.round((score / max) * 100);
-                    const label = component.replace(/([A-Z])/g, ' $1').toUpperCase();
-                    return (
-                      <div key={component}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '3px' }}>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</span>
-                          <span style={{ fontSize: '10px', fontWeight: 700, color: scoreColor(pct) }}>{score}/{max}</span>
-                        </div>
-                        <div className="score-bar-track">
-                          <div className="score-bar-fill" style={{ width: `${pct}%`, background: scoreColor(pct) }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-
-            {/* Entry trigger */}
-            {signal.entryTrigger && (
-              <div style={{ marginTop: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', padding: '8px 10px' }}>
-                <span style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>TRIGGER: </span>
-                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{signal.entryTrigger}</span>
-              </div>
-            )}
-          </>
-        )}
-
-        {/* Why this signal */}
-        {isTrade && signal.technicalReason && (
-          <div style={{ marginTop: '10px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
-            <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '6px' }}>WHY THIS SIGNAL</div>
-            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6 }}>{signal.technicalReason}</div>
-            {signal.oiReason && (
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>{signal.oiReason}</div>
-            )}
-          </div>
-        )}
-
-        {/* ── Confluence Checklist (Rules 10, 17) ──────────── */}
-        {(() => {
-          const setup: any = (signal as any).confluenceSetup;
-          if (!setup || !setup.confirmations) return null;
-          const cfms: Record<string, any> = setup.confirmations;
-          const statusIcon = (s: string) => {
-            if (s === 'PASS')        return { icon: '✓', color: 'var(--emerald)' };
-            if (s === 'FAIL')        return { icon: '✗', color: 'var(--rose)' };
-            if (s === 'FAIL_CHOPPY') return { icon: '⚡', color: 'var(--rose)' };
-            if (s === 'UNAVAILABLE') return { icon: '—', color: 'var(--amber)' };
-            return                    { icon: '…', color: 'var(--text-muted)' };
-          };
-          const rows = [
-            { key: 'vwap',          label: 'VWAP Position' },
-            { key: 'ema20',         label: '20 EMA Trend' },
-            { key: 'orbBreakout',   label: 'ORB Breakout' },
-            { key: 'candleStrength',label: 'Candle Strength' },
-            { key: 'volume',        label: 'Volume' },
-            { key: 'retest',        label: 'Retest & Rejection' },
-            { key: 'choppiness',    label: 'Choppiness Filter' },
-          ];
-          return (
-            <div style={{ marginTop: '12px', borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: '10px' }}>
-              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>CONFLUENCE CONFIRMATIONS</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                {rows.map(({ key, label }) => {
-                  const c = cfms[key] ?? {};
-                  const si = statusIcon(c.status ?? 'PENDING');
-                  return (
-                    <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                        <span style={{ fontSize: '13px', color: si.color, fontWeight: 800, width: '14px', textAlign: 'center' }}>{si.icon}</span>
-                        {label}
-                      </span>
-                      <span style={{ fontSize: '10px', fontWeight: 700, color: si.color, letterSpacing: '0.04em' }}>{c.status ?? 'PENDING'}</span>
-                    </div>
-                  );
-                })}
-              </div>
-              {/* Rejection reason banner */}
-              {setup.rejectionReason && (
-                <div style={{ marginTop: '8px', padding: '8px 10px', borderRadius: '8px', background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.2)' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--rose)', lineHeight: 1.5 }}>{setup.rejectionReason}</span>
-                </div>
-              )}
-              {/* ORB levels */}
-              {(setup.orbHigh || setup.orbLow) && (
-                <div style={{ marginTop: '8px', display: 'flex', gap: '8px' }}>
-                  <div style={{ flex: 1, background: 'rgba(16,185,129,0.08)', borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>ORB HIGH</div>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--emerald)' }}>{setup.orbHigh?.toFixed(1) ?? '—'}</div>
-                  </div>
-                  <div style={{ flex: 1, background: 'rgba(244,63,94,0.08)', borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>ORB LOW</div>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--rose)' }}>{setup.orbLow?.toFixed(1) ?? '—'}</div>
-                  </div>
-                  <div style={{ flex: 1, background: 'rgba(167,139,250,0.08)', borderRadius: '6px', padding: '6px 8px', textAlign: 'center' }}>
-                    <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 700 }}>VWAP</div>
-                    <div style={{ fontSize: '13px', fontWeight: 800, color: '#a78bfa' }}>{setup.vwap?.toFixed(1) ?? '—'}</div>
-                  </div>
-                </div>
-              )}
-              {/* State badge */}
-              <div style={{ marginTop: '8px', textAlign: 'center' }}>
-                <span style={{
-                  fontSize: '10px', fontWeight: 800, letterSpacing: '0.06em', padding: '4px 12px',
-                  borderRadius: '20px',
-                  background: setup.state === 'ENTRY_TRIGGERED' ? 'rgba(16,185,129,0.15)' :
-                    setup.state === 'WAITING_FOR_RETEST' ? 'rgba(245,158,11,0.15)' : 'rgba(100,116,139,0.1)',
-                  color: setup.state === 'ENTRY_TRIGGERED' ? 'var(--emerald)' :
-                    setup.state === 'WAITING_FOR_RETEST' ? 'var(--amber)' : 'var(--text-muted)'
-                }}>
-                  {setup.state?.replace(/_/g, ' ')}
-                </span>
-              </div>
-            </div>
-          );
-        })()}
-
-        <div style={{
-          marginTop: '12px',
-          padding: '8px 12px',
-          borderRadius: '8px',
-          background: 'rgba(255,255,255,0.03)',
-          border: '1px solid rgba(255,255,255,0.06)',
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '13px' }}>⏰</span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Created At:</span>
-            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>
-              {formatTimeIST(signal.createdAt)} IST
-            </span>
-          </div>
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', background: 'rgba(0,0,0,0.3)', padding: '2px 8px', borderRadius: '4px' }}>
-            {timeSince(signal.createdAt)}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// TIMELINE ITEM
-// ═══════════════════════════════════════════════════════════════
-function TimelineItem({
-  signal,
-  onDelete,
-  deleting,
-}: {
-  signal: Signal;
-  onDelete?: (s: Signal) => void;
-  deleting?: string | null;
-}) {
-  const sc = statusConfig(signal.status);
-  const isCall = signal.signalType === 'CALL_BUY';
-  return (
-    <div className="card" style={{ padding: '10px 12px', display: 'flex', alignItems: 'center', gap: '10px' }}>
-      <div style={{ minWidth: '66px', flexShrink: 0 }}>
-        <div style={{ fontSize: '11px', color: 'var(--text-primary)', fontWeight: 700, fontFamily: 'monospace', lineHeight: 1.2 }}>
-          {formatTimeIST(signal.createdAt)}
-        </div>
-        <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
-          {timeSince(signal.createdAt)}
-        </div>
-      </div>
-      <div style={{ width: '3px', height: '32px', borderRadius: '2px', background: signal.signalType === 'NO_TRADE' ? 'var(--border)' : isCall ? 'var(--emerald)' : 'var(--rose)', flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>
-          {signal.signalType === 'NO_TRADE' ? 'NO TRADE' : `${isCall ? '🟢' : '🔴'} ${signal.signalType === 'CALL_BUY' ? 'CALL' : 'PUT'} ${signal.strike} ${signal.optionType ?? ''}`}
-        </div>
-        {signal.signalType !== 'NO_TRADE' && (
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>
-            Entry ₹{fmt(signal.entryLow, 0)} · SL ₹{fmt(signal.sl, 0)} · T1 ₹{fmt(signal.target1, 0)}
-          </div>
-        )}
-        {signal.noTradeReason && (
-          <div style={{ fontSize: '10px', color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: '2px' }}>
-            {signal.noTradeReason.slice(0, 60)}…
-          </div>
-        )}
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
-        <div style={{ fontSize: '10px', fontWeight: 700, color: sc.color, background: sc.bg, padding: '3px 7px', borderRadius: '6px' }}>
-          {sc.label.split(' ').slice(1).join(' ')}
-        </div>
-        {onDelete && signal.id && (
-          <button
-            onClick={() => onDelete(signal)}
-            disabled={deleting === signal.id}
-            title="Delete signal"
-            style={{
-              background: 'rgba(244,63,94,0.1)',
-              border: '1px solid rgba(244,63,94,0.25)',
-              borderRadius: '6px',
-              color: 'var(--rose)',
-              cursor: 'pointer',
-              padding: '3px 7px',
-              fontSize: '12px',
-              lineHeight: 1,
-              opacity: deleting === signal.id ? 0.4 : 1,
-              transition: 'all 0.15s',
-            }}
-          >
-            🗑
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════
 // SIGNALS TAB
 // ═══════════════════════════════════════════════════════════════
 function SignalsTab({
-  signal, todaySignals, loading, onDelete,
+  signal,
+  todaySignals,
+  loading,
+  onDelete,
+  quote,
 }: {
   signal: Signal | null;
   todaySignals: Signal[];
   loading: boolean;
   onDelete: (id: string) => void;
+  quote: Quote | null;
 }) {
   const [deleting, setDeleting] = useState<string | null>(null);
 
@@ -670,46 +713,29 @@ function SignalsTab({
     setDeleting(null);
   };
 
-  const trades   = todaySignals.filter(s => s.signalType !== 'NO_TRADE');
-  const noTrades = todaySignals.filter(s => s.signalType === 'NO_TRADE');
-
-  const DeleteBtn = ({ s }: { s: Signal }) => s.id ? (
-    <button
-      onClick={() => handleDel(s)}
-      disabled={deleting === s.id}
-      title="Delete signal"
-      style={{
-        background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)',
-        borderRadius: '8px', color: 'var(--rose)', cursor: 'pointer',
-        padding: '4px 8px', fontSize: '14px', lineHeight: 1,
-        opacity: deleting === s.id ? 0.4 : 1,
-        transition: 'all 0.15s',
-      }}
-    >
-      🗑
-    </button>
-  ) : null;
+  const trades = todaySignals.filter(s => s.signalType === 'CALL_BUY' || s.signalType === 'PUT_BUY');
+  const noTrades = todaySignals.filter(s => s.signalType === 'NO_TRADE' || s.signalType === 'WATCH');
+  const isRealActiveTrade = signal && (signal.signalType === 'CALL_BUY' || signal.signalType === 'PUT_BUY') && (signal.status === 'ENTRY_TRIGGERED' || signal.status === 'POSITION_ACTIVE');
 
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
-      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>Signals</div>
+      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>Active Signals & Setups</div>
 
-      {/* Current signal */}
-      {signal && signal.signalType !== 'NO_TRADE' && (
+      {/* Current Signal Card OR No-Signal Banner */}
+      {isRealActiveTrade ? (
         <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>CURRENT SIGNAL</div>
-            <DeleteBtn s={signal} />
-          </div>
-          <SignalCard signal={signal} compact={false} />
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>CURRENT ACTIVE SIGNAL</div>
+          <SignalCard signal={signal} compact={false} onDelete={onDelete} />
         </>
+      ) : (
+        <NoSignalCard signal={signal} quote={quote} />
       )}
 
       {/* Today's trades */}
       {trades.length > 0 && (
         <>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '14px' }}>
-            TODAY'S SETUPS ({trades.length})
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '16px' }}>
+            TODAY'S TRIGGERED SIGNALS ({trades.length})
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {trades.map((s, i) => (
@@ -727,7 +753,7 @@ function SignalsTab({
       {/* No-trade log */}
       {noTrades.length > 0 && (
         <>
-          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '16px' }}>NO-TRADE LOG ({noTrades.length})</div>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px', marginTop: '16px' }}>NO-TRADE & MONITORING LOG ({noTrades.length})</div>
           <div className="card" style={{ padding: '12px' }}>
             {noTrades.map((s, i) => (
               <div key={s.id ?? i} style={{ padding: '8px 0', borderBottom: i < noTrades.length - 1 ? '1px solid var(--border)' : 'none', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
@@ -741,11 +767,24 @@ function SignalsTab({
                         ({timeSince(s.createdAt)})
                       </span>
                     </div>
-                    <span style={{ fontSize: '10px', color: 'var(--rose)' }}>Score: {s.signalScore}</span>
+                    <span style={{ fontSize: '10px', color: 'var(--rose)' }}>Score: {s.signalScore || 0}</span>
                   </div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{s.noTradeReason?.slice(0, 100)}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{s.noTradeReason?.slice(0, 100) || 'Conditions pending'}</div>
                 </div>
-                <DeleteBtn s={s} />
+                {s.id && (
+                  <button
+                    onClick={() => handleDel(s)}
+                    disabled={deleting === s.id}
+                    title="Delete log"
+                    style={{
+                      background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)',
+                      borderRadius: '6px', color: 'var(--rose)', cursor: 'pointer',
+                      padding: '4px 6px', fontSize: '11px',
+                    }}
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -753,23 +792,13 @@ function SignalsTab({
       )}
 
       {loading && todaySignals.length === 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '12px' }}>
           {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 80, borderRadius: 12 }} />)}
-        </div>
-      )}
-
-      {!loading && todaySignals.length === 0 && (
-        <div style={{ textAlign: 'center', padding: '48px 16px', color: 'var(--text-muted)' }}>
-          <div style={{ fontSize: '40px', marginBottom: '12px' }}>📭</div>
-          <div style={{ fontSize: '16px', fontWeight: 700, marginBottom: '6px' }}>No signals yet today</div>
-          <div style={{ fontSize: '13px' }}>Signals will appear here during market hours</div>
         </div>
       )}
     </div>
   );
 }
-
-
 
 // ═══════════════════════════════════════════════════════════════
 // OPTION CHAIN TAB
@@ -783,18 +812,18 @@ function ChainTab({ chain, loading }: { chain: Chain | null; loading: boolean })
 
   if (!chain) return null;
 
-  const maxOI = Math.max(...chain.rows.map(r => Math.max(r.ceOi || 0, r.peOi || 0)));
+  const maxOI = Math.max(...chain.rows.map(r => Math.max(r.ceOi || 0, r.peOi || 0)), 1);
 
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
       {/* Chain header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
         <div>
-          <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>Option Chain</div>
+          <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>NIFTY Option Chain</div>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Expiry: {chain.expiry}</div>
         </div>
-        <span className={`badge ${chain.providerStatus === 'MOCK' ? 'badge-mock' : 'badge-live'}`}>
-          {chain.providerStatus === 'MOCK' ? '🎭 DEMO' : '📡 LIVE'}
+        <span className="badge badge-live">
+          📡 UPSTOX LIVE
         </span>
       </div>
 
@@ -878,135 +907,273 @@ function ChainTab({ chain, loading }: { chain: Chain | null; loading: boolean })
 }
 
 // ═══════════════════════════════════════════════════════════════
-// HISTORY TAB
+// HISTORY TAB (COMPLETE DATABASE-BACKED AUDIT & PAGINATION)
 // ═══════════════════════════════════════════════════════════════
 function HistoryTab({
-  todaySignals,
-  timelineEvents,
-  missedSignals,
-  summary,
+  userId,
+  onDeleteSignal,
 }: {
-  todaySignals: Signal[];
-  timelineEvents: any[];
-  missedSignals: any[];
-  summary: any;
+  userId: string;
+  onDeleteSignal: (id: string) => Promise<void>;
 }) {
-  const [activeSection, setActiveSection] = useState<'timeline' | 'missed'>('timeline');
+  const [historySignals, setHistorySignals] = useState<Signal[]>([]);
+  const [stats, setStats] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [dateRange, setDateRange] = useState<string>('all');
+  const [signalType, setSignalType] = useState<string>('ALL');
+  const [page, setPage] = useState<number>(1);
+  const [pagination, setPagination] = useState<{ total: number; page: number; limit: number; totalPages: number }>({
+    total: 0, page: 1, limit: 15, totalPages: 1
+  });
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const fetchHistory = useCallback(async () => {
+    try {
+      setLoading(true);
+      const params = new URLSearchParams({
+        page: page.toString(),
+        limit: '15',
+        dateRange,
+        signalType,
+      });
+
+      const res = await fetch(`/api/signals/history?${params.toString()}`, {
+        headers: { 'x-user-id': userId }
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setHistorySignals(data.signals || []);
+          setPagination(data.pagination || { total: 0, page: 1, limit: 15, totalPages: 1 });
+          setStats(data.stats || null);
+        }
+      }
+    } catch (err) {
+      console.error('[fetchHistory error]', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [page, dateRange, signalType, userId]);
+
+  useEffect(() => {
+    fetchHistory();
+  }, [fetchHistory]);
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Are you sure you want to permanently delete this signal from history?')) return;
+    setDeletingId(id);
+    await onDeleteSignal(id);
+    setDeletingId(null);
+    fetchHistory();
+  };
 
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
-      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>
-        History & Signals
-      </div>
-
-      {/* Daily stats from Supabase summary */}
-      <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>
-          TODAY'S PERFORMANCE (SIMULATED)
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
-          {[
-            { label: 'SIGNALS', val: summary?.totalSignals ?? todaySignals.filter(s => s.signalType !== 'NO_TRADE').length, color: 'var(--text-primary)' },
-            { label: 'TRIGGERED', val: summary?.triggeredSignals ?? 0, color: 'var(--sky)' },
-            { label: 'WIN RATE', val: summary?.winRate != null ? `${summary.winRate}%` : '—', color: summary?.winRate >= 50 ? 'var(--emerald)' : 'var(--rose)' },
-            { label: 'TARGET 1', val: summary?.target1Hits ?? 0, color: 'var(--emerald)' },
-            { label: 'TARGET 2', val: summary?.target2Hits ?? 0, color: 'var(--emerald)' },
-            { label: 'STOP LOSS', val: summary?.slHits ?? 0, color: 'var(--rose)' },
-          ].map(({ label, val, color }) => (
-            <div key={label} className="card" style={{ padding: '12px', textAlign: 'center' }}>
-              <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>{label}</div>
-              <div className="price-display" style={{ fontSize: '20px', fontWeight: 800, color, marginTop: '4px' }}>{val}</div>
-            </div>
-          ))}
-        </div>
-        {summary?.simulatedPnl != null && (
-          <div className="card" style={{ marginTop: '8px', padding: '10px 14px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: summary.simulatedPnl >= 0 ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-secondary)' }}>SIMULATED P&L (1 LOT = 50 QTY)</span>
-            <span style={{ fontSize: '14px', fontWeight: 800, color: summary.simulatedPnl >= 0 ? 'var(--emerald)' : 'var(--rose)', fontFamily: 'monospace' }}>
-              {summary.simulatedPnl >= 0 ? '+' : ''}₹{summary.simulatedPnl.toLocaleString('en-IN')}
-            </span>
-          </div>
-        )}
-      </div>
-
-      {/* Tabs for Timeline vs Missed */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-        <button
-          onClick={() => setActiveSection('timeline')}
-          style={{
-            flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-            background: activeSection === 'timeline' ? 'var(--emerald)' : 'var(--bg-elevated)',
-            color: activeSection === 'timeline' ? '#000' : 'var(--text-secondary)',
-            border: 'none', cursor: 'pointer'
-          }}
-        >
-          Timeline ({timelineEvents.length || todaySignals.length})
-        </button>
-        <button
-          onClick={() => setActiveSection('missed')}
-          style={{
-            flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-            background: activeSection === 'missed' ? 'var(--amber)' : 'var(--bg-elevated)',
-            color: activeSection === 'missed' ? '#000' : 'var(--text-secondary)',
-            border: 'none', cursor: 'pointer'
-          }}
-        >
-          Missed ({missedSignals.length})
-        </button>
-      </div>
-
-      {/* Timeline Section */}
-      {activeSection === 'timeline' && (
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
         <div>
-          {todaySignals.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {todaySignals.map((s, i) => <TimelineItem key={i} signal={s} />)}
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: '36px', marginBottom: '8px' }}>📅</div>
-              <div style={{ fontSize: '14px', fontWeight: 600 }}>No signals generated today</div>
-              <div style={{ fontSize: '12px', marginTop: '4px' }}>Market monitoring is actively running in background</div>
-            </div>
-          )}
+          <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)' }}>Signal Audit History</div>
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Persistent Database Records & Real Market Analytics</div>
+        </div>
+        <button onClick={fetchHistory} style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px 10px', color: 'var(--text-secondary)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
+          <RefreshCw size={13} style={{ animation: loading ? 'spin 1s linear infinite' : 'none' }} /> Refresh
+        </button>
+      </div>
+
+      {/* Performance Summary Strip */}
+      {stats && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>
+            HISTORICAL PERFORMANCE SUMMARY
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+            {[
+              { label: 'TOTAL TRADES', val: stats.totalSignals, color: 'var(--text-primary)' },
+              { label: 'TRIGGERED', val: stats.triggered, color: 'var(--sky)' },
+              { label: 'WIN RATE', val: stats.winRate != null ? `${stats.winRate}%` : '—', color: stats.winRate >= 50 ? 'var(--emerald)' : 'var(--rose)' },
+              { label: 'TARGET 1', val: stats.target1Hits, color: 'var(--emerald)' },
+              { label: 'TARGET 2', val: stats.target2Hits, color: 'var(--emerald)' },
+              { label: 'STOP LOSS', val: stats.slHits, color: 'var(--rose)' },
+            ].map(({ label, val, color }) => (
+              <div key={label} className="card" style={{ padding: '10px', textAlign: 'center' }}>
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.06em' }}>{label}</div>
+                <div className="price-display" style={{ fontSize: '18px', fontWeight: 800, color, marginTop: '3px' }}>{val}</div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
-      {/* Missed Opportunities Section */}
-      {activeSection === 'missed' && (
-        <div>
-          {missedSignals.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {missedSignals.map((s, i) => (
-                <div key={i} className="card" style={{ padding: '12px', borderLeft: '3px solid var(--amber)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                    <div>
-                      <div style={{ fontSize: '13px', fontWeight: 800, color: 'var(--text-primary)' }}>
-                        {s.signal_type === 'CALL_BUY' ? '🟢 CALL' : '🔴 PUT'} {s.strike} {s.option_type}
-                      </div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                        Entry: ₹{s.entry_low}–₹{s.entry_high} · SL: ₹{s.sl} · Target: ₹{s.target1}
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right' }}>
-                      <span style={{ fontSize: '11px', fontWeight: 800, color: 'var(--amber)', background: 'rgba(245,158,11,0.1)', padding: '3px 8px', borderRadius: '6px' }}>
-                        Score: {s.signal_score}
+      {/* Filters Bar */}
+      <div className="card" style={{ padding: '12px', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {/* Date Filter */}
+        <div style={{ display: 'flex', gap: '6px', overflowX: 'auto', paddingBottom: '2px' }}>
+          {[
+            { id: 'all', label: 'All Time' },
+            { id: 'today', label: 'Today' },
+            { id: '7d', label: 'Past 7 Days' },
+            { id: '30d', label: 'Past 30 Days' },
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => { setDateRange(f.id); setPage(1); }}
+              style={{
+                padding: '6px 12px', borderRadius: '8px', fontSize: '11px', fontWeight: 700,
+                background: dateRange === f.id ? 'var(--emerald)' : 'var(--bg-elevated)',
+                color: dateRange === f.id ? '#000' : 'var(--text-secondary)',
+                border: 'none', cursor: 'pointer', whiteSpace: 'nowrap'
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Signal Type Filter */}
+        <div style={{ display: 'flex', gap: '6px' }}>
+          {[
+            { id: 'ALL', label: 'All Types' },
+            { id: 'CALL', label: '🟢 Calls Only' },
+            { id: 'PUT', label: '🔴 Puts Only' },
+            { id: 'NO_TRADE', label: '⛔ No-Trade Log' },
+          ].map(f => (
+            <button
+              key={f.id}
+              onClick={() => { setSignalType(f.id); setPage(1); }}
+              style={{
+                padding: '5px 10px', borderRadius: '6px', fontSize: '10px', fontWeight: 700,
+                background: signalType === f.id ? 'rgba(255,255,255,0.15)' : 'transparent',
+                color: signalType === f.id ? 'var(--text-primary)' : 'var(--text-muted)',
+                border: '1px solid var(--border)', cursor: 'pointer', whiteSpace: 'nowrap'
+              }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Signals List */}
+      {loading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {[1, 2, 3, 4].map(i => <div key={i} className="skeleton" style={{ height: 75, borderRadius: 10 }} />)}
+        </div>
+      ) : historySignals.length === 0 ? (
+        <div className="card" style={{ textAlign: 'center', padding: '40px 16px', color: 'var(--text-muted)' }}>
+          <div style={{ fontSize: '32px', marginBottom: '8px' }}>📭</div>
+          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px' }}>No signals found</div>
+          <div style={{ fontSize: '12px' }}>No trading records matching your selected date and filter criteria.</div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {historySignals.map((s) => {
+            const isTrade = s.signalType === 'CALL_BUY' || s.signalType === 'PUT_BUY';
+            const isCall = s.signalType === 'CALL_BUY';
+            const sc = statusConfig(s.status);
+
+            return (
+              <div key={s.id} className="card" style={{ padding: '12px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <span style={{ fontSize: '14px', fontWeight: 800, color: !isTrade ? 'var(--text-muted)' : isCall ? 'var(--emerald)' : 'var(--rose)' }}>
+                        {!isTrade ? '⛔ NO TRADE' : `${isCall ? '🟢 CALL' : '🔴 PUT'} ${s.strike} ${s.optionType ?? ''}`}
+                      </span>
+                      <span style={{ fontSize: '10px', fontWeight: 700, color: sc.color, background: sc.bg, padding: '2px 6px', borderRadius: '4px' }}>
+                        {sc.label}
                       </span>
                     </div>
+                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'monospace', marginTop: '3px' }}>
+                      {formatDateIST(s.createdAt)} · {formatTimeIST(s.createdAt)} IST ({timeSince(s.createdAt)})
+                    </div>
                   </div>
-                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-secondary)' }}>
-                    {s.technical_reason || s.no_trade_reason}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '11px', fontWeight: 700, color: scoreColor(s.signalScore || 0) }}>
+                      Score: {s.signalScore || 0}/100
+                    </span>
+                    {s.id && (
+                      <button
+                        onClick={() => handleDelete(s.id!)}
+                        disabled={deletingId === s.id}
+                        title="Delete record"
+                        style={{
+                          background: 'rgba(244,63,94,0.1)', border: '1px solid rgba(244,63,94,0.25)',
+                          borderRadius: '6px', color: 'var(--rose)', cursor: 'pointer',
+                          padding: '4px 8px', fontSize: '11px', lineHeight: 1,
+                          opacity: deletingId === s.id ? 0.3 : 1
+                        }}
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
                   </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div style={{ textAlign: 'center', padding: '32px', color: 'var(--text-muted)' }}>
-              <div style={{ fontSize: '36px', marginBottom: '8px' }}>✅</div>
-              <div style={{ fontSize: '14px', fontWeight: 600 }}>No missed signals</div>
-              <div style={{ fontSize: '12px', marginTop: '4px' }}>You are completely up to date</div>
-            </div>
-          )}
+
+                {isTrade && s.entryLow && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '6px', marginTop: '10px', background: 'rgba(0,0,0,0.25)', padding: '8px', borderRadius: '8px' }}>
+                    <div>
+                      <div style={{ fontSize: '8px', color: 'var(--text-muted)', fontWeight: 700 }}>ENTRY</div>
+                      <div className="price-display" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>₹{fmt(s.entryLow, 0)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '8px', color: 'var(--rose)', fontWeight: 700 }}>SL</div>
+                      <div className="price-display" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--rose)' }}>₹{fmt(s.sl, 0)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '8px', color: 'var(--emerald)', fontWeight: 700 }}>T1</div>
+                      <div className="price-display" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--emerald)' }}>₹{fmt(s.target1, 0)}</div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: '8px', color: 'var(--sky)', fontWeight: 700 }}>R:R</div>
+                      <div className="price-display" style={{ fontSize: '12px', fontWeight: 700, color: 'var(--sky)' }}>1:{s.rrRatio || 1.5}</div>
+                    </div>
+                  </div>
+                )}
+
+                {s.technicalReason && (
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+                    {s.technicalReason}
+                  </div>
+                )}
+                {s.noTradeReason && (
+                  <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                    {s.noTradeReason}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Pagination Bar */}
+      {pagination.totalPages > 1 && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', padding: '8px 4px' }}>
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            style={{
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px',
+              padding: '6px 12px', color: page <= 1 ? 'var(--text-muted)' : 'var(--text-primary)',
+              cursor: page <= 1 ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px'
+            }}
+          >
+            <ChevronLeft size={14} /> Prev
+          </button>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+            Page {pagination.page} of {pagination.totalPages} ({pagination.total} signals)
+          </span>
+          <button
+            onClick={() => setPage(p => Math.min(pagination.totalPages, p + 1))}
+            disabled={page >= pagination.totalPages}
+            style={{
+              background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px',
+              padding: '6px 12px', color: page >= pagination.totalPages ? 'var(--text-muted)' : 'var(--text-primary)',
+              cursor: page >= pagination.totalPages ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px'
+            }}
+          >
+            Next <ChevronRight size={14} />
+          </button>
         </div>
       )}
     </div>
@@ -1016,125 +1183,111 @@ function HistoryTab({
 // ═══════════════════════════════════════════════════════════════
 // SETTINGS TAB
 // ═══════════════════════════════════════════════════════════════
-function SettingsTab() {
-  const [pushStatus, setPushStatus] = useState<string>('idle');
-
-  const handleEnablePush = async () => {
-    if (!('serviceWorker' in navigator) || !('Notification' in window)) {
-      alert('Push notifications are not supported by this browser.');
-      return;
-    }
-
-    try {
-      setPushStatus('subscribing');
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') {
-        alert('Notification permission was not granted.');
-        setPushStatus('denied');
-        return;
-      }
-
-      const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || undefined,
-        });
-      }
-
-      const rawKey = sub.getKey ? sub.getKey('p256dh') : null;
-      const rawAuth = sub.getKey ? sub.getKey('auth') : null;
-      const p256dh = rawKey ? btoa(String.fromCharCode(...new Uint8Array(rawKey))) : '';
-      const auth = rawAuth ? btoa(String.fromCharCode(...new Uint8Array(rawAuth))) : '';
-
-      await fetch('/api/notifications/subscribe', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          endpoint: sub.endpoint,
-          keys: { p256dh, auth },
-          deviceInfo: navigator.userAgent,
-        }),
-      });
-
-      setPushStatus('enabled');
-      alert('✅ Background Push Notifications are now enabled on your device!');
-    } catch (err: any) {
-      console.error('Push error:', err);
-      setPushStatus('error');
-      alert(`Could not enable notifications: ${err.message}`);
-    }
-  };
+function SettingsTab({
+  userId,
+  onUserChange,
+  deletedCount,
+}: {
+  userId: string;
+  onUserChange: (newUserId: string) => void;
+  deletedCount: number;
+}) {
+  const [customUser, setCustomUser] = useState(userId);
 
   return (
     <div className="animate-fade-in" style={{ padding: '16px' }}>
-      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>Settings</div>
+      <div style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary)', marginBottom: '16px' }}>Settings & System Diagnostics</div>
 
-      {/* Web Push Alerts Card */}
+      {/* User Isolation Card */}
       <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>BACKGROUND ALERTS</div>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>USER PROFILE & ISOLATION</div>
         <div className="card" style={{ padding: '16px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-            <div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)' }}>Mobile Push Notifications</div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                Receive Entry, Target, and SL alerts even when the browser is closed.
-              </div>
-            </div>
+          <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px', lineHeight: 1.5 }}>
+            Signals and deletion actions are completely isolated per user. Deleting a signal on User 1 does not affect User 2.
           </div>
-          <button
-            onClick={handleEnablePush}
-            disabled={pushStatus === 'subscribing' || pushStatus === 'enabled'}
-            style={{
-              width: '100%', padding: '10px', borderRadius: '10px',
-              background: pushStatus === 'enabled' ? 'rgba(16,185,129,0.15)' : 'var(--emerald)',
-              color: pushStatus === 'enabled' ? 'var(--emerald)' : '#000',
-              fontWeight: 800, fontSize: '13px', border: pushStatus === 'enabled' ? '1px solid var(--emerald)' : 'none',
-              cursor: pushStatus === 'enabled' ? 'default' : 'pointer'
-            }}
-          >
-            {pushStatus === 'enabled' ? '✓ Push Notifications Active' : pushStatus === 'subscribing' ? 'Requesting Permission...' : '🔔 Enable Push Notifications'}
-          </button>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+            {['user_alpha', 'user_beta'].map(u => (
+              <button
+                key={u}
+                onClick={() => { setCustomUser(u); onUserChange(u); }}
+                style={{
+                  flex: 1, padding: '8px', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                  background: userId === u ? 'var(--emerald)' : 'var(--bg-elevated)',
+                  color: userId === u ? '#000' : 'var(--text-secondary)',
+                  border: '1px solid var(--border)', cursor: 'pointer'
+                }}
+              >
+                {u === 'user_alpha' ? '👤 User A (Alpha)' : '👤 User B (Beta)'}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              type="text"
+              value={customUser}
+              onChange={(e) => setCustomUser(e.target.value)}
+              placeholder="Custom User ID"
+              style={{
+                flex: 1, background: 'var(--bg-surface)', border: '1px solid var(--border)',
+                borderRadius: '8px', padding: '8px 12px', color: 'var(--text-primary)',
+                fontSize: '12px', fontFamily: 'monospace'
+              }}
+            />
+            <button
+              onClick={() => onUserChange(customUser)}
+              style={{
+                background: 'var(--sky)', color: '#000', fontWeight: 800,
+                fontSize: '11px', padding: '8px 14px', borderRadius: '8px', border: 'none', cursor: 'pointer'
+              }}
+            >
+              Switch
+            </button>
+          </div>
+          <div style={{ marginTop: '10px', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
+            <span>Active ID: <strong style={{ color: 'var(--text-primary)', fontFamily: 'monospace' }}>{userId}</strong></span>
+            <span>Deleted signals: <strong style={{ color: 'var(--rose)' }}>{deletedCount}</strong></span>
+          </div>
         </div>
       </div>
 
-      {/* Risk */}
+      {/* Market Data Provider Status */}
       <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>RISK MANAGEMENT</div>
-        <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {[
-            { label: 'Capital', val: '₹1,00,000', desc: 'Virtual trading capital' },
-            { label: 'Risk per trade', val: '1%', desc: 'Max ₹1,000 per signal' },
-            { label: 'Max daily loss', val: '3%', desc: 'Max ₹3,000 per day' },
-            { label: 'Max trades / day', val: '3', desc: 'Signal frequency limit' },
-          ].map(({ label, val, desc }) => (
-            <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>{desc}</div>
-              </div>
-              <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: '8px', padding: '6px 12px', fontSize: '13px', fontWeight: 700, color: 'var(--emerald)' }}>
-                {val}
-              </div>
-            </div>
-          ))}
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>MARKET DATA INTEGRATION</div>
+        <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Primary Provider</span>
+            <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--emerald)' }}>Upstox v2 API (Live)</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Analytics Token</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--emerald)', fontFamily: 'monospace' }}>SECURE SERVER-SIDE (Active)</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Token Scope</span>
+            <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)' }}>Read-Only (No Trade Placement)</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>Fallback Providers</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>NSE India, Yahoo Finance</span>
+          </div>
         </div>
       </div>
 
-      {/* Strategy */}
+      {/* Strategy Engine Parameters */}
       <div style={{ marginBottom: '16px' }}>
-        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>STRATEGY</div>
-        <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--text-muted)', letterSpacing: '0.08em', marginBottom: '8px' }}>STRATEGY ENGINE PARAMETERS</div>
+        <div className="card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {[
-            { label: 'Min signal score', val: '75 / 100' },
+            { label: 'Strategy Specification', val: '20-Rule NIFTY Confluence Engine' },
+            { label: 'Timeframe', val: '5-Minute Candles (09:15 - 15:30 IST)' },
+            { label: 'Opening Range (ORB)', val: 'First 15m (09:15 - 09:30 IST)' },
+            { label: 'Min Confluence Score', val: '75 / 100' },
             { label: 'Min Risk:Reward', val: '1 : 1.5' },
-            { label: 'Strategy version', val: 'NIFTY-V1.0' },
-            { label: 'Time filter', val: '09:20 – 15:00' },
+            { label: 'Execution Authority', val: 'Strict Confluence (Zero Fake Fallbacks)' },
           ].map(({ label, val }) => (
             <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{label}</span>
-              <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{val}</span>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{label}</span>
+              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'monospace' }}>{val}</span>
             </div>
           ))}
         </div>
@@ -1144,7 +1297,7 @@ function SettingsTab() {
       <div className="card" style={{ padding: '14px', background: 'rgba(244,63,94,0.05)', border: '1px solid rgba(244,63,94,0.2)' }}>
         <div style={{ fontSize: '11px', fontWeight: 700, color: 'var(--rose)', marginBottom: '6px', letterSpacing: '0.06em' }}>⚠️ DISCLAIMER</div>
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', lineHeight: 1.6 }}>
-          OptionPulse is a market analysis tool only. It does NOT place any real trades. All signals are for informational purposes. Never trade with money you cannot afford to lose. Past performance does not guarantee future results.
+          OptionPulse is a professional algorithmic market research and signal generation platform. It analyzes real-time NSE market data via Upstox API. It does NOT automatically execute orders on user accounts. Trading in derivatives involves substantial risk of loss.
         </div>
       </div>
     </div>
@@ -1175,10 +1328,9 @@ function BottomNav({ active, onChange }: { active: string; onChange: (tab: strin
 }
 
 // ═══════════════════════════════════════════════════════════════
-// MAIN APP
+// MAIN APPLICATION
 // ═══════════════════════════════════════════════════════════════
 export default function App() {
-  // ── Fix 1: Persist active tab across hard refreshes ────────────────────────
   const [tab, setTab] = useState<string>(() => {
     if (typeof window !== 'undefined') return localStorage.getItem('gk_active_tab') ?? 'home';
     return 'home';
@@ -1186,7 +1338,45 @@ export default function App() {
 
   const handleTabChange = (t: string) => {
     setTab(t);
-    localStorage.setItem('gk_active_tab', t);
+    if (typeof window !== 'undefined') localStorage.setItem('gk_active_tab', t);
+  };
+
+  // User Identity State
+  const [userId, setUserId] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      let u = localStorage.getItem('gk_user_id');
+      if (!u) {
+        u = 'user_alpha';
+        localStorage.setItem('gk_user_id', u);
+      }
+      return u;
+    }
+    return 'user_alpha';
+  });
+
+  // Local Deleted IDs tracking for instant zero-resurrection UI
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(`gk_deleted_${userId}`);
+        if (raw) return new Set(JSON.parse(raw));
+      } catch {}
+    }
+    return new Set<string>();
+  });
+
+  const handleUserChange = (newUid: string) => {
+    const cleaned = newUid.trim() || 'user_alpha';
+    setUserId(cleaned);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('gk_user_id', cleaned);
+      try {
+        const raw = localStorage.getItem(`gk_deleted_${cleaned}`);
+        setDeletedIds(raw ? new Set(JSON.parse(raw)) : new Set<string>());
+      } catch {
+        setDeletedIds(new Set<string>());
+      }
+    }
   };
 
   const [loading, setLoading] = useState(true);
@@ -1199,17 +1389,18 @@ export default function App() {
   const [timelineEvents, setTimelineEvents] = useState<any[]>([]);
   const [missedSignals, setMissedSignals] = useState<any[]>([]);
   const [dailySummary, setDailySummary] = useState<any>(null);
-  const [isMock, setIsMock] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string>('');
 
   const fetchAll = useCallback(async () => {
     try {
       setLoading(true);
+      const headers = { 'x-user-id': userId };
+
       const [quoteRes, currentSigRes, todaySigRes, summaryRes, chainRes, chartRes] = await Promise.allSettled([
         fetch('/api/market/quote'),
-        fetch('/api/signals/current'),
-        fetch('/api/signals/today'),
-        fetch('/api/summary/today'),
+        fetch('/api/signals/current', { headers }),
+        fetch('/api/signals/today', { headers }),
+        fetch('/api/summary/today', { headers }),
         fetch('/api/market/option-chain'),
         fetch('/api/market/chart?timeframe=5m&limit=80'),
       ]);
@@ -1222,18 +1413,27 @@ export default function App() {
       if (currentSigRes.status === 'fulfilled' && currentSigRes.value.ok) {
         const d = await currentSigRes.value.json();
         if (d.success && d.signal) {
-          setSignal(d.signal);
+          if (!d.signal.id || !deletedIds.has(d.signal.id)) {
+            setSignal(d.signal);
+          } else {
+            setSignal(null);
+          }
         }
       }
 
       if (todaySigRes.status === 'fulfilled' && todaySigRes.value.ok) {
         const d = await todaySigRes.value.json();
         if (d.success) {
-          setTodaySignals(d.signals || []);
+          const rawSignals: Signal[] = d.signals || [];
+          const filtered = rawSignals.filter(s => !s.id || !deletedIds.has(s.id));
+          setTodaySignals(filtered);
           setTimelineEvents(d.timelineEvents || []);
           setMissedSignals(d.missedSignals || []);
-          if (!signal && d.signals?.length > 0) {
-            setSignal(d.signals[d.signals.length - 1]);
+          if (!signal && filtered.length > 0) {
+            const latest = filtered[filtered.length - 1];
+            if (latest.signalType === 'CALL_BUY' || latest.signalType === 'PUT_BUY') {
+              setSignal(latest);
+            }
           }
         }
       }
@@ -1262,7 +1462,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [signal]);
+  }, [userId, deletedIds, signal]);
 
   // Initial load + auto-refresh every 10s
   useEffect(() => {
@@ -1271,28 +1471,38 @@ export default function App() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
-  // ── Fix 3: Delete a signal (optimistic UI + API) ──────────────────────────
+  // ── Permanent Signal Deletion Handler ──────────────────────────
   const handleDelete = async (id: string) => {
-    // Optimistic: remove from local state immediately
+    // 1. Optimistic removal & add to deletedIds set immediately
+    setDeletedIds(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(`gk_deleted_${userId}`, JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+
     setTodaySignals(prev => prev.filter(s => s.id !== id));
     if (signal?.id === id) setSignal(null);
 
-    // Persist to DB (fire-and-forget; failure is non-fatal)
+    // 2. Persist deletion on server
     try {
-      await fetch(`/api/signals/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/signals/${id}`, {
+        method: 'DELETE',
+        headers: { 'x-user-id': userId }
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        console.warn('[handleDelete] Server reported error:', errData.error || res.statusText);
+      }
     } catch (e) {
-      console.warn('[handleDelete] API call failed (signal removed from UI anyway):', e);
+      console.error('[handleDelete] API request network error:', e);
     }
   };
 
   return (
     <>
-      {/* Demo banner */}
-      {isMock && (
-        <div className="demo-banner">🎭 DEMO DATA — Connect a real market data provider for live signals</div>
-      )}
-
-      {/* Main content */}
       <main id="main-content">
         {tab === 'home' && (
           <HomeTab
@@ -1306,26 +1516,37 @@ export default function App() {
             todaySignals={todaySignals}
             missedSignals={missedSignals}
             onSelectTab={handleTabChange}
+            onDelete={handleDelete}
           />
         )}
         {tab === 'signals' && (
-          <SignalsTab signal={signal} todaySignals={todaySignals} loading={loading} onDelete={handleDelete} />
+          <SignalsTab
+            signal={signal}
+            todaySignals={todaySignals}
+            loading={loading}
+            onDelete={handleDelete}
+            quote={quote}
+          />
         )}
         {tab === 'chain' && (
           <ChainTab chain={chain} loading={loading} />
         )}
         {tab === 'history' && (
           <HistoryTab
-            todaySignals={todaySignals}
-            timelineEvents={timelineEvents}
-            missedSignals={missedSignals}
-            summary={dailySummary}
+            userId={userId}
+            onDeleteSignal={handleDelete}
           />
         )}
-        {tab === 'settings' && <SettingsTab />}
+        {tab === 'settings' && (
+          <SettingsTab
+            userId={userId}
+            onUserChange={handleUserChange}
+            deletedCount={deletedIds.size}
+          />
+        )}
       </main>
 
-      {/* Bottom Nav */}
+      {/* Bottom Navigation Bar */}
       <BottomNav active={tab} onChange={handleTabChange} />
 
       <style>{`

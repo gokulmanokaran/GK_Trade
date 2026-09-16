@@ -16,9 +16,8 @@ from monitoring.providers.interface import NormalizedQuote
 from monitoring.signals.state_machine import SignalStateMachine, SignalState, SignalEventType
 from monitoring.storage.supabase_sync import SupabaseSync
 from monitoring.notifications.push_dispatcher import PushNotificationDispatcher
-from backend.analysis_engine.indicators import IndicatorEngine
-from backend.analysis_engine.scoring_engine import ScoringEngine
-from backend.analysis_engine.trade_structuring import TradeStructuringEngine
+from backend.analysis_engine.confluence_strategy import ConfluenceStrategyEngine
+from backend.data_provider.interface import UnderlyingQuote, Candle
 
 logger = logging.getLogger("optionpulse.monitoring.service")
 
@@ -30,9 +29,6 @@ class MarketMonitoringService:
         self.provider = ResilientStreamingProvider()
         self.storage = SupabaseSync()
         self.notifier = PushNotificationDispatcher(self.storage)
-        self.indicator_engine = IndicatorEngine()
-        self.scoring_engine = ScoringEngine()
-        self.trade_engine = TradeStructuringEngine()
 
         self._running = False
         self._stop_event = asyncio.Event()
@@ -159,81 +155,131 @@ class MarketMonitoringService:
                             if sent:
                                 result["notifications_sent"] += 1
             else:
-                # 4. No active signal: evaluate new signal generation
+                # 4. No active signal: evaluate real-time 20-rule Confluence Strategy
                 # Only during regular market session (09:15 - 15:30)
                 if session.get("is_open", False):
-                    chain = await self.provider.get_option_chain("NIFTY")
-                    # Deterministic rule evaluation
-                    # Check if market has a clear confluence setup
-                    atm = chain.atm_strike
-                    # Using Quantitative Scoring Engine
-                    # If score >= 75 and RR >= 1.5, structure a valid trade
-                    # Example: when intraday trend is established
-                    if abs(quote.change_pct) >= 0.25 and chain.total_ce_oi > 0:
-                        direction = "CALL_BUY" if quote.change >= 0 else "PUT_BUY"
-                        opt_type = "CE" if direction == "CALL_BUY" else "PE"
-                        strike = atm
+                    try:
+                        chain = await self.provider.get_option_chain("NIFTY")
+                        raw_candles = await self.provider.get_historical_data("NIFTY", "5m", 80)
+                        
+                        # Convert to domain Candle objects
+                        candles = []
+                        for c in raw_candles:
+                            if isinstance(c, Candle):
+                                candles.append(c)
+                            elif hasattr(c, "open"):
+                                candles.append(Candle(
+                                    timestamp=str(getattr(c, "timestamp", "")),
+                                    open=float(c.open),
+                                    high=float(c.high),
+                                    low=float(c.low),
+                                    close=float(c.close),
+                                    volume=int(getattr(c, "volume", 0) or 0)
+                                ))
 
-                        # Find matching strike row in chain
-                        strike_row = next((r for r in chain.rows if r.get("strike") == strike), None)
-                        opt_price = 150.0
-                        if strike_row:
-                            opt_price = (strike_row.get("ce_ltp") if opt_type == "CE" else strike_row.get("pe_ltp")) or 150.0
+                        # Build domain UnderlyingQuote
+                        underlying_quote = UnderlyingQuote(
+                            symbol="NIFTY",
+                            ltp=quote.ltp,
+                            open=quote.open,
+                            high=quote.high,
+                            low=quote.low,
+                            close=quote.ltp,
+                            prev_close=quote.prev_close,
+                            change=quote.change,
+                            p_change=quote.change_pct,
+                            volume=quote.volume,
+                            vwap=quote.vwap,
+                            timestamp=quote.timestamp.strftime("%Y-%m-%d %H:%M:%S IST") if quote.timestamp else "",
+                            data_source=quote.provider,
+                            is_delayed=(quote.status != "LIVE"),
+                            data_age_seconds=int(quote.data_age_seconds),
+                            data_quality=quote.status,
+                            is_live_data=(quote.status == "LIVE"),
+                        )
 
-                        entry_low = round(opt_price * 0.98, 1)
-                        entry_high = round(opt_price * 1.02, 1)
-                        sl = round(opt_price * 0.80, 1)
-                        t1 = round(opt_price * 1.25, 1)
-                        t2 = round(opt_price * 1.50, 1)
+                        # Evaluate strict 20-rule confluence
+                        confluence = ConfluenceStrategyEngine.evaluate(
+                            candles=candles,
+                            quote=underlying_quote,
+                            chain=None,
+                            is_market_open=session.get("is_open", False),
+                            data_quality=quote.status,
+                            data_source=quote.provider,
+                            data_age_seconds=int(quote.data_age_seconds),
+                            is_live_data=(quote.status == "LIVE"),
+                        )
 
-                        new_signal = {
-                            "instrument": "NIFTY",
-                            "signal_type": direction,
-                            "expiry": chain.expiry,
-                            "strike": strike,
-                            "option_type": opt_type,
-                            "nifty_price": quote.ltp,
-                            "entry_low": entry_low,
-                            "entry_high": entry_high,
-                            "entry_trigger": f"NIFTY sustaining {'above' if direction == 'CALL_BUY' else 'below'} VWAP",
-                            "sl": sl,
-                            "sl_reason": "1.5x ATR dynamic volatility stop",
-                            "target1": t1,
-                            "target2": t2,
-                            "rr_ratio": 1.75,
-                            "signal_score": 82,
-                            "confidence": 85.0,
-                            "regime": "TRENDING_BULLISH" if direction == "CALL_BUY" else "TRENDING_BEARISH",
-                            "trend_direction": "BULLISH" if direction == "CALL_BUY" else "BEARISH",
-                            "technical_reason": f"NIFTY {direction}: EMA 9/21 cross, positive VWAP slope",
-                            "oi_reason": f"PCR: {chain.pcr:.2f}, heavy put buildup at {chain.atm_strike - 100}",
-                            "chain_reason": "IV within optimal premium band (13.5%), tight bid-ask spread",
-                            "liquidity_ok": True,
-                            "status": "WATCH",
-                            "created_at": now_utc.isoformat(),
-                        }
+                        # ONLY generate signal if genuine ENTRY_TRIGGERED
+                        if confluence.state == "ENTRY_TRIGGERED" and confluence.signal_type in ("CALL_BUY", "PUT_BUY"):
+                            # Deduplication guard: Check if identical strike + signal_type already exists today
+                            strike = confluence.recommended_strike or Math.round(quote.ltp / 50) * 50
+                            today_str = now_utc.strftime("%Y-%m-%d")
+                            
+                            # Query active or today's signals to prevent duplicates
+                            existing_signals = await self.storage.get_active_signals()
+                            is_duplicate = any(
+                                s.get("strike") == strike and s.get("signal_type") == confluence.signal_type
+                                for s in existing_signals
+                            )
 
-                        inserted_sig = await self.storage.insert_signal(new_signal)
-                        if inserted_sig:
-                            sig_id = str(inserted_sig.get("id"))
-                            result["signal_generated"] = True
-                            result["signal_id"] = sig_id
+                            if not is_duplicate:
+                                entry_price = confluence.entry_price or quote.ltp
+                                entry_low = round(entry_price - 2.0, 1)
+                                entry_high = round(entry_price + 2.0, 1)
 
-                            # Create initial event
-                            idempotency_key = f"{sig_id}_NEW_SIGNAL"
-                            await self.storage.insert_signal_event({
-                                "signal_id": sig_id,
-                                "event_type": "NEW_SIGNAL",
-                                "to_status": "WATCH",
-                                "nifty_price": quote.ltp,
-                                "idempotency_key": idempotency_key,
-                                "created_at": now_utc.isoformat(),
-                            })
-                            result["events_generated"].append("NEW_SIGNAL")
+                                new_signal = {
+                                    "instrument": "NIFTY",
+                                    "signal_type": confluence.signal_type,
+                                    "expiry": getattr(chain, "expiry", "Current Expiry"),
+                                    "strike": strike,
+                                    "option_type": confluence.option_type or ("CE" if confluence.direction == "CE" else "PE"),
+                                    "nifty_price": quote.ltp,
+                                    "entry_low": entry_low,
+                                    "entry_high": entry_high,
+                                    "entry_trigger": f"Enter {confluence.instrument_name or confluence.option_type} at target ₹{confluence.option_ltp or entry_price}",
+                                    "sl": confluence.stop_loss or round(entry_price * 0.85, 1),
+                                    "sl_reason": confluence.invalidation_condition or "Retest swing or VWAP break",
+                                    "target1": confluence.target_1 or round(entry_price * 1.25, 1),
+                                    "target2": confluence.target_2 or round(entry_price * 1.50, 1),
+                                    "rr_ratio": confluence.risk_reward or 1.75,
+                                    "signal_score": confluence.confidence_score,
+                                    "confidence": float(confluence.confidence_score),
+                                    "regime": "TRENDING_BULLISH" if confluence.direction == "CE" else "TRENDING_BEARISH",
+                                    "trend_direction": "BULLISH" if confluence.direction == "CE" else "BEARISH",
+                                    "technical_reason": confluence.summary_reason,
+                                    "oi_reason": f"PCR: {getattr(chain, 'pcr', 1.0):.2f}",
+                                    "chain_reason": f"ATM: {getattr(chain, 'atm_strike', strike)}",
+                                    "liquidity_ok": True,
+                                    "status": "WATCH",
+                                    "created_at": now_utc.isoformat(),
+                                }
 
-                            # Dispatch notification
-                            await self.notifier.dispatch(inserted_sig, "NEW_SIGNAL")
-                            result["notifications_sent"] += 1
+                                inserted_sig = await self.storage.insert_signal(new_signal)
+                                if inserted_sig:
+                                    sig_id = str(inserted_sig.get("id"))
+                                    result["signal_generated"] = True
+                                    result["signal_id"] = sig_id
+
+                                    idempotency_key = f"{sig_id}_NEW_SIGNAL"
+                                    await self.storage.insert_signal_event({
+                                        "signal_id": sig_id,
+                                        "event_type": "NEW_SIGNAL",
+                                        "to_status": "WATCH",
+                                        "nifty_price": quote.ltp,
+                                        "idempotency_key": idempotency_key,
+                                        "created_at": now_utc.isoformat(),
+                                    })
+                                    result["events_generated"].append("NEW_SIGNAL")
+                                    await self.notifier.dispatch(inserted_sig, "NEW_SIGNAL")
+                                    result["notifications_sent"] += 1
+                                    logger.info(f"Genuine signal created: {confluence.signal_type} {strike} (ID: {sig_id})")
+                            else:
+                                logger.info(f"Duplicate setup detected for {confluence.signal_type} {strike}. Skipped.")
+                        else:
+                            logger.debug(f"Confluence state: {confluence.state} - {confluence.summary_reason}. NO SIGNAL.")
+                    except Exception as sig_err:
+                        logger.warning(f"Error during strategy evaluation: {sig_err}")
 
         except Exception as e:
             result["status"] = "FAILED"

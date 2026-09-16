@@ -59,51 +59,7 @@ async def get_latest_signal(
             is_live_data=getattr(quote, "is_live_data", not quote.is_delayed)
         )
 
-        # Persist signal if active trade setup
-        if trade.signal != "NO TRADE":
-            db_signal = Signal(
-                symbol=sym,
-                instrument=trade.instrument,
-                direction=trade.signal,
-                entry_low=trade.entry_low,
-                entry_high=trade.entry_high,
-                entry_trigger=trade.entry_trigger,
-                stop_loss=trade.stop_loss,
-                stop_loss_reason=trade.stop_loss_reason,
-                target_1=trade.target_1,
-                target_2=trade.target_2,
-                target_3=trade.target_3,
-                exit_condition=trade.exit_condition,
-                risk_reward=trade.risk_reward,
-                signal_score=trade.signal_score,
-                confidence=trade.confidence,
-                signal_strength=trade.signal_strength,
-                market_bias=trade.market_bias,
-                invalidation_level=trade.invalidation_level,
-                reason=" | ".join(trade.reasons),
-                ai_explanation=ai_expl["summary"],
-                status="ACTIVE",
-                outcome="PENDING"
-            )
-            db.add(db_signal)
-            await db.flush()
-
-            db_comp = SignalComponent(
-                signal_id=db_signal.id,
-                trend_score=score.trend_score,
-                momentum_score=score.momentum_score,
-                vwap_score=score.vwap_score,
-                price_action_score=score.price_action_score,
-                volume_score=score.volume_score,
-                option_chain_score=score.option_chain_score,
-                volatility_score=score.volatility_score,
-                risk_reward_score=score.risk_reward_score,
-                total_score=score.total_score,
-                details_json=score.details
-            )
-            db.add(db_comp)
-            await db.commit()
-
+        # Return evaluation result strictly without side-effects (GET is read-only)
         return {
             "trade": trade.model_dump(),
             "confluence_setup": asdict(confluence),
@@ -171,3 +127,27 @@ async def get_signal_history(
         return {"signals": history}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{signal_id}")
+async def delete_signal(
+    signal_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Deletes a signal and its associated components from the database."""
+    try:
+        stmt = select(Signal).where(Signal.id == signal_id)
+        result = await db.execute(stmt)
+        sig = result.scalars().first()
+        if not sig:
+            raise HTTPException(status_code=404, detail=f"Signal {signal_id} not found")
+
+        await db.delete(sig)
+        await db.commit()
+        return {"success": True, "deleted": signal_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to delete signal: {str(e)}")
+

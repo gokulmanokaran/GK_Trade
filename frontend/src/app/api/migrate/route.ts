@@ -24,6 +24,7 @@ export async function GET(req: NextRequest) {
     '001_initial_schema.sql',
     '002_monitor_and_notifications.sql',
     '003_signal_write_policies.sql',
+    '004_user_isolation_and_indexes.sql',
   ];
 
   const results: Record<string, string> = {};

@@ -13,6 +13,7 @@ import zoneinfo
 from backend.data_provider.interface import (
     MarketDataProvider, UnderlyingQuote, OptionChainData, Candle, MarketStatus
 )
+from backend.data_provider.upstox_provider import UpstoxProvider
 from backend.data_provider.nse_provider import NseIndiaProvider
 from backend.data_provider.yahoo_provider import YahooFinanceProvider
 from backend.data_provider.mock_provider import MockMarketDataProvider
@@ -23,6 +24,7 @@ IST = zoneinfo.ZoneInfo("Asia/Kolkata")
 
 class CompositeMarketDataProvider(MarketDataProvider):
     def __init__(self):
+        self.upstox_provider = UpstoxProvider()
         self.nse_provider = NseIndiaProvider()
         self.yahoo_provider = YahooFinanceProvider()
         self.mock_provider = MockMarketDataProvider()
@@ -43,9 +45,17 @@ class CompositeMarketDataProvider(MarketDataProvider):
 
     async def get_index_quote(self, symbol: str) -> UnderlyingQuote:
         self.request_count += 1
-        t0 = time.time()
+        # 1. Primary: Upstox Real-Time Market Data
+        if self.upstox_provider.is_configured:
+            try:
+                quote = await self.upstox_provider.get_index_quote(symbol)
+                self.last_provider_used = "UPSTOX_REALTIME"
+                self.last_success_time = datetime.now(IST)
+                return quote
+            except Exception as e:
+                logger.warning(f"Upstox quote failed for {symbol}: {e}. Trying secondary provider...")
 
-        # Try Yahoo Finance first for underlying index quotes
+        # 2. Secondary / Reference: Yahoo Finance
         try:
             quote = await self.yahoo_provider.get_index_quote(symbol)
             self.last_provider_used = "YAHOO_FINANCE"
@@ -54,7 +64,7 @@ class CompositeMarketDataProvider(MarketDataProvider):
         except Exception as e:
             logger.debug(f"YahooFinance quote failed for {symbol}: {e}. Trying NSE / Mock...")
 
-        # Fallback to Mock / Synthetic Replay
+        # 3. Fallback: Mock / Synthetic Replay (Labeled clearly)
         try:
             quote = await self.mock_provider.get_index_quote(symbol)
             self.last_provider_used = "MOCK_REPLAY"
@@ -66,7 +76,16 @@ class CompositeMarketDataProvider(MarketDataProvider):
             raise
 
     async def get_expiries(self, symbol: str) -> List[str]:
-        # Try NSE first
+        # 1. Primary: Upstox
+        if self.upstox_provider.is_configured:
+            try:
+                expiries = await self.upstox_provider.get_expiries(symbol)
+                if expiries:
+                    return expiries
+            except Exception as e:
+                logger.debug(f"Upstox expiries failed for {symbol}: {e}. Trying NSE...")
+
+        # 2. Secondary: NSE India
         try:
             expiries = await self.nse_provider.get_expiries(symbol)
             if expiries:
@@ -78,9 +97,18 @@ class CompositeMarketDataProvider(MarketDataProvider):
 
     async def get_option_chain(self, symbol: str, expiry: Optional[str] = None) -> OptionChainData:
         self.request_count += 1
-        t0 = time.time()
+        # 1. Primary: Upstox Real-Time Option Chain
+        if self.upstox_provider.is_configured:
+            try:
+                chain = await self.upstox_provider.get_option_chain(symbol, expiry)
+                self.last_provider_used = "UPSTOX_REALTIME"
+                self.last_success_time = datetime.now(IST)
+                chain.data_source = "UPSTOX_REALTIME"
+                return chain
+            except Exception as e:
+                logger.warning(f"Upstox option chain failed for {symbol}: {e}. Trying NSE Live...")
 
-        # Attempt Live NSE India fetch
+        # 2. Secondary: NSE India Live
         try:
             chain = await self.nse_provider.get_option_chain(symbol, expiry)
             self.last_provider_used = "NSE_INDIA_LIVE"
@@ -93,7 +121,7 @@ class CompositeMarketDataProvider(MarketDataProvider):
             self.last_error_message = f"NSE Live unavailable: {type(e).__name__}"
             logger.info(f"NSE Live option chain fallback triggered: {e}")
 
-        # Graceful fallback to Mock / Synthetic Replay with clear labeling
+        # 3. Fallback: Mock / Synthetic Replay with clear delayed flag
         underlying_ltp = None
         try:
             q = await self.get_index_quote(symbol)
@@ -109,7 +137,16 @@ class CompositeMarketDataProvider(MarketDataProvider):
     async def get_historical_data(
         self, symbol: str, timeframe: str = "5m", limit: int = 80
     ) -> List[Candle]:
-        # Attempt Yahoo Finance historical candles
+        # 1. Primary: Upstox 5-minute Candles
+        if self.upstox_provider.is_configured:
+            try:
+                candles = await self.upstox_provider.get_historical_data(symbol, timeframe, limit)
+                if candles and len(candles) > 0:
+                    return candles
+            except Exception as e:
+                logger.warning(f"Upstox candles failed for {symbol}: {e}. Trying Yahoo...")
+
+        # 2. Secondary: Yahoo Finance historical candles
         try:
             candles = await self.yahoo_provider.get_historical_data(symbol, timeframe, limit)
             if candles and len(candles) > 0:

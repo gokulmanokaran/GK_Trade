@@ -136,5 +136,14 @@ def calculate_indicators(candles: List[Candle]) -> Dict[str, Any]:
         "atr_14": round(float(atr_14.iloc[last_idx]), 2) if not pd.isna(atr_14.iloc[last_idx]) else 25.0,
         "bb_upper": round(float(bb_upper.iloc[last_idx]), 2) if not pd.isna(bb_upper.iloc[last_idx]) else None,
         "bb_lower": round(float(bb_lower.iloc[last_idx]), 2) if not pd.isna(bb_lower.iloc[last_idx]) else None,
-        "bb_mid": round(float(bb_mid.iloc[last_idx]), 2) if not pd.isna(bb_mid.iloc[last_idx]) else None,
     }
+
+
+class IndicatorEngine:
+    """Wrapper class providing calculate_indicators interface."""
+    @staticmethod
+    def calculate(candles: List[Candle]) -> Dict[str, Any]:
+        return calculate_indicators(candles)
+
+    def calculate_indicators(self, candles: List[Candle]) -> Dict[str, Any]:
+        return calculate_indicators(candles)

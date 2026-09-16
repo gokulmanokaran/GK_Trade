@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSupabaseAdmin } from '@/lib/supabase/server';
-import { todayIST, getMarketStatus } from '@/lib/market-hours';
-import { getMarketDataProvider } from '@/lib/market-data';
-import { evaluateConfluence, calculateORB } from '@/lib/signal/confluence-strategy';
+import { todayIST } from '@/lib/market-hours';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,13 +9,15 @@ export async function GET(req: NextRequest) {
   try {
     const supabase = getSupabaseAdmin();
     const today = todayIST();
+    const userId = req.headers.get('x-user-id') || req.nextUrl.searchParams.get('userId');
+
     let allSignals: any[] = [];
     let timelineEvents: any[] = [];
 
-    // 1. Try to fetch from Supabase
+    // Fetch genuine signals exclusively from the database
     if (supabase) {
       try {
-        const { data: signals } = await supabase
+        const { data: signals, error: sigErr } = await supabase
           .from('signals')
           .select(`
             *,
@@ -28,8 +28,21 @@ export async function GET(req: NextRequest) {
           .neq('status', 'DELETED')
           .order('created_at', { ascending: true });
 
-        if (signals && signals.length > 0) {
-          allSignals = signals;
+        if (sigErr) {
+          console.error('[signals/today] Database fetch error:', sigErr);
+        } else if (signals && signals.length > 0) {
+          // If user specified, filter out signals deleted by this user
+          let userFilteredSignals = signals;
+          if (userId) {
+            const { data: userDeleted } = await supabase
+              .from('user_deleted_signals')
+              .select('signal_id')
+              .eq('user_id', userId);
+            const deletedSet = new Set((userDeleted || []).map((d: any) => d.signal_id));
+            userFilteredSignals = signals.filter((s: any) => !deletedSet.has(s.id));
+          }
+
+          allSignals = userFilteredSignals;
           for (const sig of allSignals) {
             if (sig.signal_events && Array.isArray(sig.signal_events)) {
               for (const evt of sig.signal_events) {
@@ -50,68 +63,7 @@ export async function GET(req: NextRequest) {
           }
         }
       } catch (e) {
-        console.warn('[signals/today] Supabase fetch error, generating session timeline:', e);
-      }
-    }
-
-    // 2. If no signals stored in DB, synthesize today's session timeline events from candles
-    if (allSignals.length === 0) {
-      try {
-        const provider = getMarketDataProvider();
-        const marketStatus = getMarketStatus();
-        const [quote, chain, candles] = await Promise.all([
-          provider.getNiftyQuote(),
-          provider.getOptionChain(),
-          provider.getHistoricalData('5m', 80),
-        ]);
-
-        const { orbHigh, orbLow } = calculateORB(candles);
-        const confluence = evaluateConfluence(candles, quote, chain, {
-          isMarketOpen: marketStatus.isOpen,
-          dataQuality: quote.isMock ? 'DELAYED' : 'LIVE',
-        });
-
-        // Add session opening range event
-        if (orbHigh !== null && orbLow !== null) {
-          timelineEvents.push({
-            id: 'evt-orb-open',
-            event_type: 'ORB_ESTABLISHED',
-            details: `15-Min Opening Range: High ${orbHigh.toFixed(1)} | Low ${orbLow.toFixed(1)}`,
-            created_at: `${today}T09:30:00+05:30`,
-            status: 'WATCH',
-          });
-        }
-
-        // Add confluence state event
-        timelineEvents.push({
-          id: 'evt-confluence-status',
-          event_type: confluence.state,
-          details: confluence.summaryReason,
-          created_at: new Date().toISOString(),
-          status: confluence.state,
-        });
-
-        if (confluence.state === 'ENTRY_TRIGGERED') {
-          allSignals.push({
-            id: `today-${Date.now()}`,
-            signal_type: confluence.signalType,
-            status: confluence.state,
-            strike: confluence.recommendedStrike,
-            option_type: confluence.optionType,
-            nifty_price: quote.ltp,
-            entry_low: confluence.entryPrice,
-            entry_high: confluence.entryPrice,
-            sl: confluence.sl,
-            target1: confluence.target1,
-            target2: confluence.target2,
-            rr_ratio: confluence.rrRatio,
-            signal_score: confluence.confidenceScore,
-            technical_reason: confluence.summaryReason,
-            created_at: new Date().toISOString(),
-          });
-        }
-      } catch (candleErr) {
-        console.warn('[signals/today] Candle evaluation fallback error:', candleErr);
+        console.error('[signals/today] Supabase fetch error:', e);
       }
     }
 

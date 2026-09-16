@@ -218,6 +218,10 @@ class ResilientStreamingProvider(MarketDataProvider):
             logger.error(f"Error fetching option chain for {symbol}: {e}")
             raise
 
+    async def get_historical_data(self, symbol: str, timeframe: str = "5m", limit: int = 80):
+        """Fetches historical/intraday candles via composite provider."""
+        return await self._composite.get_historical_data(symbol, timeframe, limit)
+
     async def stream_events(self) -> AsyncGenerator[NormalizedQuote, None]:
         """
         Continuously yields incoming quotes.
