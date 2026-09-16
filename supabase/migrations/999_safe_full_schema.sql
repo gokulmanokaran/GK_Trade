@@ -1,5 +1,5 @@
 -- ============================================================
--- OptionPulse — Safe Re-run Migration
+-- OptionPulse — Safe Re-run Migration.
 -- Uses IF NOT EXISTS / exception handlers everywhere.
 -- Safe to run even if tables already exist.
 -- ============================================================
