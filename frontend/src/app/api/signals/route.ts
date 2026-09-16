@@ -5,8 +5,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/server';
 import { todayIST } from '@/lib/market-hours';
 
 export const runtime = 'nodejs';
-// No cache — always fresh signal
-export const revalidate = 0;
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {

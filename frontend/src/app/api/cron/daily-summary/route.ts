@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabase/server';
 import { todayIST } from '@/lib/market-hours';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization');

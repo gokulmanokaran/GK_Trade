@@ -3,7 +3,7 @@ import { getMarketDataProvider } from '@/lib/market-data';
 import { getMarketStatus } from '@/lib/market-hours';
 
 export const runtime = 'nodejs';
-export const revalidate = 30;
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   try {
