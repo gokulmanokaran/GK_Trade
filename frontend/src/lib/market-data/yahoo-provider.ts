@@ -108,16 +108,20 @@ export class YahooFinanceProvider implements MarketDataProvider {
       const ohlcv = result.indicators?.quote?.[0] || {};
       const adjclose = result.indicators?.adjclose?.[0]?.adjclose || [];
 
+      const startIdx = Math.max(0, timestamps.length - limit);
       const candles: OHLCCandle[] = timestamps
         .slice(-limit)
-        .map((ts, i) => ({
-          timestamp: new Date(ts * 1000),
-          open: +(ohlcv.open?.[i] ?? 0).toFixed(2),
-          high: +(ohlcv.high?.[i] ?? 0).toFixed(2),
-          low: +(ohlcv.low?.[i] ?? 0).toFixed(2),
-          close: +(ohlcv.close?.[i] ?? adjclose[i] ?? 0).toFixed(2),
-          volume: ohlcv.volume?.[i] ?? 0,
-        }))
+        .map((ts, i) => {
+          const idx = startIdx + i;
+          return {
+            timestamp: new Date(ts * 1000),
+            open: +(ohlcv.open?.[idx] ?? 0).toFixed(2),
+            high: +(ohlcv.high?.[idx] ?? 0).toFixed(2),
+            low: +(ohlcv.low?.[idx] ?? 0).toFixed(2),
+            close: +(ohlcv.close?.[idx] ?? adjclose[idx] ?? 0).toFixed(2),
+            volume: ohlcv.volume?.[idx] ?? 0,
+          };
+        })
         .filter((c) => c.close > 0);
 
       return candles;

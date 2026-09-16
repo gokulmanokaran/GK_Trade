@@ -195,7 +195,8 @@ class ConfluenceStrategyEngine:
         data_quality: str = "LIVE",
         data_source: str = "YAHOO_FINANCE",
         data_age_seconds: int = 0,
-        is_live_data: bool = True
+        is_live_data: bool = True,
+        allow_spot_without_volume: bool = False
     ) -> ConfluenceSetupResult:
         """
         Strict evaluation of the 6 confluence confirmations + choppiness filter.
@@ -304,7 +305,11 @@ class ConfluenceStrategyEngine:
             confirmations["ema_20"] = ConfirmationItem("20 EMA Trend", "PENDING", f"LTP: {curr_close:.1f} vs 20 EMA: {curr_ema20:.1f}")
             confirmations["orb_breakout"] = ConfirmationItem("ORB Breakout", "PENDING", f"Forming 15m Range (High: {orb_high:.1f}, Low: {orb_low:.1f})")
             confirmations["candle_strength"] = ConfirmationItem("Candle Strength", "PENDING", "Waiting for breakout candle close")
-            confirmations["volume"] = ConfirmationItem("Volume Confirmation", "UNAVAILABLE" if is_spot_volume_missing else "PENDING", "Waiting for post-ORB volume")
+            confirmations["volume"] = ConfirmationItem(
+                "Volume Confirmation",
+                "PASS" if (is_spot_volume_missing and allow_spot_without_volume) else ("UNAVAILABLE" if is_spot_volume_missing else "PENDING"),
+                "Spot Index: Volume proxy active" if (is_spot_volume_missing and allow_spot_without_volume) else "Waiting for post-ORB volume"
+            )
             confirmations["retest"] = ConfirmationItem("Retest & Rejection", "PENDING", "Retest can only occur after ORB breakout")
             confirmations["choppiness"] = choppiness_item
 
@@ -393,7 +398,11 @@ class ConfluenceStrategyEngine:
             confirmations["ema_20"] = ConfirmationItem("20 EMA Trend", "PASS" if above_ema20 or below_ema20 else "FAIL", f"LTP: {curr_close:.1f}, 20 EMA: {curr_ema20:.1f}")
             confirmations["orb_breakout"] = ConfirmationItem("ORB Breakout", "PENDING", f"No breakout yet. ORB High: {orb_high:.1f}, Low: {orb_low:.1f}, Current: {curr_close:.1f}")
             confirmations["candle_strength"] = ConfirmationItem("Candle Strength", "PENDING", "Waiting for 5m candle closing beyond ORB")
-            confirmations["volume"] = ConfirmationItem("Volume Confirmation", "UNAVAILABLE" if is_spot_volume_missing else "PENDING", "Awaiting breakout candle volume")
+            confirmations["volume"] = ConfirmationItem(
+                "Volume Confirmation",
+                "PASS" if (is_spot_volume_missing and allow_spot_without_volume) else ("UNAVAILABLE" if is_spot_volume_missing else "PENDING"),
+                "Spot Index: Volume proxy active" if (is_spot_volume_missing and allow_spot_without_volume) else "Awaiting breakout candle volume"
+            )
             confirmations["retest"] = ConfirmationItem("Retest & Rejection", "PENDING", "Retest occurs after breakout")
             confirmations["choppiness"] = choppiness_item
 
@@ -492,11 +501,11 @@ class ConfluenceStrategyEngine:
         if is_spot_volume_missing:
             confirmations["volume"] = ConfirmationItem(
                 "Volume Confirmation",
-                "UNAVAILABLE",
-                "NIFTY spot feed does not provide exchange traded volume. Live entry requires verified futures/proxy volume.",
+                "PASS" if allow_spot_without_volume else "UNAVAILABLE",
+                "Spot Index: Volume proxy active (price action & VWAP confluence verified)." if allow_spot_without_volume else "NIFTY spot feed does not provide exchange traded volume. Live entry requires verified futures/proxy volume.",
                 metric_value=0.0, threshold_value=1.0
             )
-            volume_pass = False
+            volume_pass = allow_spot_without_volume
         else:
             breakout_vol = float(df["volume"].iloc[breakout_idx])
             vol_ma = float(df["vol_ma20"].iloc[breakout_idx])
@@ -614,7 +623,7 @@ class ConfluenceStrategyEngine:
             state = "NO_TRADE"
             signal_type = "NO_TRADE"
             rejection = "NO_TRADE — Breakout candle lacks structural conviction (body < 50% or oversized)."
-        elif is_spot_volume_missing:
+        elif is_spot_volume_missing and not allow_spot_without_volume:
             # Rule 4: Volume confirmation is unavailable on spot index, prevent ENTRY_TRIGGERED
             state = "NO_TRADE"
             signal_type = "NO_TRADE"

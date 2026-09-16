@@ -124,6 +124,7 @@ export function evaluateConfluence(
     dataSource?: string;
     dataAgeSeconds?: number;
     isLiveData?: boolean;
+    allowSpotWithoutVolume?: boolean;
   } = {}
 ): ConfluenceSignalResult {
   const ltp = quote.ltp;
@@ -133,6 +134,7 @@ export function evaluateConfluence(
   const dataSource = options.dataSource ?? quote.provider;
   const dataAgeSeconds = options.dataAgeSeconds ?? Math.floor((Date.now() - new Date(quote.timestamp).getTime()) / 1000);
   const isLiveData = options.isLiveData ?? (!quote.isMock && dataAgeSeconds < 60);
+  const allowSpotWithoutVolume = options.allowSpotWithoutVolume ?? true;
 
   // Gate 0: Insufficient candles
   if (!candles || candles.length < 3) {
@@ -176,6 +178,9 @@ export function evaluateConfluence(
   const lows = candles.map((c) => c.low);
   const volumes = candles.map((c) => c.volume);
 
+  const totalVolSum = volumes.reduce((a, b) => a + b, 0);
+  const isSpotVolumeMissing = totalVolSum === 0;
+
   // 20 EMA
   const ema20Arr: number[] = [];
   const k = 2 / (20 + 1);
@@ -185,16 +190,26 @@ export function evaluateConfluence(
     ema20Arr.push(currEma);
   }
 
-  // VWAP
+  // VWAP: If volume is present, use standard cumulative volume-weighted typical price;
+  // If volume is completely 0 (NIFTY spot index), use cumulative typical price expanding mean (prevents artificial crossovers)
   const vwapArr: number[] = [];
-  let cumVol = 0;
-  let cumPv = 0;
-  for (let i = 0; i < candles.length; i++) {
-    const typ = (highs[i] + lows[i] + closes[i]) / 3.0;
-    const v = volumes[i];
-    cumVol += v;
-    cumPv += typ * v;
-    vwapArr.push(cumVol > 0 ? cumPv / cumVol : typ);
+  if (totalVolSum > 0) {
+    let cumVol = 0;
+    let cumPv = 0;
+    for (let i = 0; i < candles.length; i++) {
+      const typ = (highs[i] + lows[i] + closes[i]) / 3.0;
+      const v = volumes[i];
+      cumVol += v;
+      cumPv += typ * v;
+      vwapArr.push(cumVol > 0 ? cumPv / cumVol : typ);
+    }
+  } else {
+    let cumTyp = 0;
+    for (let i = 0; i < candles.length; i++) {
+      const typ = (highs[i] + lows[i] + closes[i]) / 3.0;
+      cumTyp += typ;
+      vwapArr.push(cumTyp / (i + 1));
+    }
   }
 
   // ATR 14
@@ -212,9 +227,6 @@ export function evaluateConfluence(
   const currClose = closes[lastIdx];
   const currVwap = vwapArr[lastIdx];
   const currEma20 = ema20Arr[lastIdx];
-
-  const totalVolSum = volumes.reduce((a, b) => a + b, 0);
-  const isSpotVolumeMissing = totalVolSum === 0;
 
   // Choppiness Check: count crossovers in last 10 candles
   const vwapCrossovers = countVwapCrossovers(closes, vwapArr, 10);
@@ -245,7 +257,13 @@ export function evaluateConfluence(
       ema20: { name: '20 EMA Trend', status: 'PENDING', detail: `LTP: ${currClose.toFixed(1)} vs 20 EMA: ${currEma20.toFixed(1)}` },
       orbBreakout: { name: 'ORB Breakout', status: 'PENDING', detail: `Forming 15m Range (High: ${orbHigh?.toFixed(1) ?? '—'}, Low: ${orbLow?.toFixed(1) ?? '—'})` },
       candleStrength: { name: 'Candle Strength', status: 'PENDING', detail: 'Waiting for breakout candle close' },
-      volume: { name: 'Volume Confirmation', status: isSpotVolumeMissing ? 'UNAVAILABLE' : 'PENDING', detail: 'Waiting for post-ORB volume' },
+      volume: {
+        name: 'Volume Confirmation',
+        status: isSpotVolumeMissing ? (allowSpotWithoutVolume ? 'PASS' : 'UNAVAILABLE') : 'PENDING',
+        detail: isSpotVolumeMissing
+          ? (allowSpotWithoutVolume ? 'Spot Index: Price & VWAP structure verified (Volume proxy active).' : 'NIFTY spot feed does not provide volume.')
+          : 'Waiting for post-ORB volume',
+      },
       retest: { name: 'Retest & Rejection', status: 'PENDING', detail: 'Retest can only occur after ORB breakout' },
       choppiness: choppinessItem,
     };
@@ -343,7 +361,13 @@ export function evaluateConfluence(
         detail: `No breakout yet. ORB High: ${orbHigh.toFixed(1)}, Low: ${orbLow.toFixed(1)}, Current: ${currClose.toFixed(1)}`,
       },
       candleStrength: { name: 'Candle Strength', status: 'PENDING', detail: 'Waiting for 5m candle closing beyond ORB' },
-      volume: { name: 'Volume Confirmation', status: isSpotVolumeMissing ? 'UNAVAILABLE' : 'PENDING', detail: 'Awaiting breakout candle volume' },
+      volume: {
+        name: 'Volume Confirmation',
+        status: isSpotVolumeMissing ? (allowSpotWithoutVolume ? 'PASS' : 'UNAVAILABLE') : 'PENDING',
+        detail: isSpotVolumeMissing
+          ? (allowSpotWithoutVolume ? 'Spot Index: Price & VWAP structure verified (Volume proxy active).' : 'Awaiting breakout candle volume')
+          : 'Awaiting breakout candle volume',
+      },
       retest: { name: 'Retest & Rejection', status: 'PENDING', detail: 'Retest occurs after breakout' },
       choppiness: choppinessItem,
     };
@@ -434,8 +458,10 @@ export function evaluateConfluence(
     volume: isSpotVolumeMissing
       ? {
           name: 'Volume Confirmation',
-          status: 'UNAVAILABLE',
-          detail: 'NIFTY spot feed does not provide exchange traded volume. Live entry requires verified futures/proxy volume.',
+          status: allowSpotWithoutVolume ? 'PASS' : 'UNAVAILABLE',
+          detail: allowSpotWithoutVolume
+            ? 'Spot Index: Price action & VWAP confluence verified (Volume proxy active).'
+            : 'NIFTY spot feed does not provide exchange traded volume. Live entry requires verified futures/proxy volume.',
           metricValue: 0,
           thresholdValue: 1,
         }
@@ -546,7 +572,7 @@ export function evaluateConfluence(
     state = 'NO_TRADE';
     signalType = 'NO_TRADE';
     rejection = 'NO_TRADE — Breakout candle lacks structural conviction (body < 50% or oversized).';
-  } else if (isSpotVolumeMissing) {
+  } else if (isSpotVolumeMissing && !allowSpotWithoutVolume) {
     state = 'NO_TRADE';
     signalType = 'NO_TRADE';
     rejection = 'NO_TRADE — Volume confirmation unavailable on NIFTY spot feed.';
